@@ -33,6 +33,7 @@ from .qc.metrics import TieMetrics
 from .timedepth.calibrate import DriftResult, calibrate_to_checkshots, drift_curve
 from .timedepth.integrate import ShallowModel, integrate_sonic
 from .timedepth.model import TimeDepth
+from .tie.auto import AutoTieResult, auto_tie
 from .tie.iterate import TieResult, tie
 from .trace import Trace
 from .units import slowness_to_velocity
@@ -68,6 +69,7 @@ class TieSession:
     time_depth: TimeDepth | None = None
     drift: DriftResult | None = None
     result: TieResult | None = None
+    auto: AutoTieResult | None = None
 
     # grading, present only for synthetic cases that know their own answer
     truth: dict = field(default_factory=dict)
@@ -136,7 +138,7 @@ class TieSession:
             "cycle_skips": [skip.summary() for skip in self.cycle_skips],
         }
         # Conditioning invalidates everything derived from the log.
-        self.time_depth = self.drift = self.result = None
+        self.time_depth = self.drift = self.result = self.auto = None
         return self._record("condition", summary)
 
     def build_time_depth(
@@ -151,7 +153,7 @@ class TieSession:
             replacement_velocity=replacement_velocity, twt_at_log_top=twt_at_log_top
         )
         self.time_depth = integrate_sonic(self.depth_tvdss, self.sonic_us_per_m, shallow)
-        self.drift = self.result = None
+        self.drift = self.result = self.auto = None
 
         return self._record("build time-depth", {
             "shallow_model": shallow.describe(float(self.depth_tvdss[0])),
@@ -189,7 +191,7 @@ class TieSession:
             knot_depth=knots,
         )
         self.time_depth = self.drift.time_depth
-        self.result = None
+        self.result = self.auto = None
 
         return self._record("calibrate", {
             **self.drift.summary(),
@@ -197,7 +199,7 @@ class TieSession:
         })
 
     def run_tie(self, **kwargs: Any) -> dict:
-        """Run the deterministic tie loop."""
+        """Run the deterministic tie loop: bulk shift, phase, wavelet. No warping."""
         self._require("time_depth", "build a time-depth model before tying")
         if self.seismic is None:
             raise SessionError("no seismic loaded; nothing to tie to")
@@ -209,10 +211,39 @@ class TieSession:
             self.density_g_cm3,
             **kwargs,
         )
+        self.auto = None
         self.time_depth = self.result.time_depth
 
         return self._record("tie", {
             **self.result.summary(),
+            **self._truth_check(self.time_depth),
+        })
+
+    def run_auto_tie(self, **kwargs: Any) -> dict:
+        """Run the tie loop, then a warp that must pass the velocity guardrail.
+
+        The warp is kept only if it is geologically admissible, is not merely
+        the constraint's own limit clipped to look admissible, and buys enough
+        correlation to justify a per-sample degree of freedom.  When it is
+        rejected the session keeps the unwarped tie and the journal records why.
+        """
+        self._require("time_depth", "build a time-depth model before tying")
+        if self.seismic is None:
+            raise SessionError("no seismic loaded; nothing to tie to")
+
+        self.auto = auto_tie(
+            self.seismic,
+            self.time_depth,
+            self.sonic_us_per_m,
+            self.density_g_cm3,
+            **kwargs,
+        )
+        self.result = self.auto.result
+        self.time_depth = self.result.time_depth
+
+        return self._record("auto-tie", {
+            **self.auto.summary(),
+            "verdict_warp": self.auto.verdict(),
             **self._truth_check(self.time_depth),
         })
 
@@ -257,6 +288,7 @@ class TieSession:
             "conditioned": self.conditioning is not None,
             "n_cycle_skips": len(self.cycle_skips),
             "tied": self.result is not None,
+            "warp_accepted": self.auto.warp_accepted if self.auto else None,
             "correlation": (
                 round(self.result.metrics.correlation, 4) if self.result else None
             ),

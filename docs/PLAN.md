@@ -312,8 +312,8 @@ after the breakpoint so the cache actually hits.
 | **M0** | Scaffolding | package, `pyproject.toml`, pytest, `data/fetch.py`, synthetic generator | **done** |
 | **M1** | Deterministic tie, no AI | load → condition → T-D → RC → wavelet → synthetic → manual shift → QC, **validated against synthetic ground truth** | **done** |
 | **M2** | Streamlit UI | log panel, T-D + drift, wavelet, synthetic-vs-seismic, QC dashboard | **done** |
-| **M3** | Auto-tie | constrained DTW + phase scan + outer loop + velocity guardrail | next |
-| **M4** | UQ | ensemble, T-D corridor, per-horizon ±ms, multimodality flag | planned |
+| **M3** | Auto-tie | constrained DTW + phase scan + outer loop + velocity guardrail | **done** |
+| **M4** | UQ | ensemble, T-D corridor, per-horizon ±ms, multimodality flag | next |
 | **M5** | Copilot | tool surface, tool runner, streaming chat panel, generated tie report | planned |
 
 M1 is the milestone that matters. Everything after it is leverage on top of a correct
@@ -394,3 +394,44 @@ point, and generic DTW packages do not expose them.
 | Deviated wells | TVDSS throughout; extraction along the well path from day one |
 | Copilot context blow-up | no arrays across the tool boundary; compact JSON summaries |
 | Open datasets unreachable from this environment | synthetic oracle is the primary target; real data is a smoke test |
+
+
+### What M3 established
+
+The warp solver recovers a known shift field to under 2 ms rms (the sample interval is
+2 ms) for constant, ramped and sinusoidal warps, never exceeds its strain limit —
+including at the trace ends, where a control-point scheme leaks and nobody looks — and
+survives a 180° polarity flip via the envelope pass.
+
+The interesting result is not the solver, though. It is that **three separate tests are
+needed before a warp may be applied**, and each was forced by a measured failure:
+
+1. **The velocity claim must be plausible.** The guardrail converts the warp into the
+   interval-velocity change it asserts against the sonic. This was built and tested
+   first, against hand-constructed warps with analytically known velocity change,
+   before the solver existed.
+
+2. **The warp must have *reached* that claim, not been clipped to it.** A warp pinned at
+   its strain limit passes the guardrail *by construction* — it was clipped to a passing
+   value. In one forward-modelled case the tie was 114 ms wrong, the warp sat at its
+   limit over 69% of the log, the guardrail reported an admissible 14.3%, and the
+   correlation improved. Every check said yes. Saturation is the only test that catches
+   this, and the threshold (0.5) is measured: over 24 cases, every improving warp
+   saturated at ≤0.42 and the sole degrading one at 0.59.
+
+3. **The warp must buy enough correlation to justify a degree of freedom per sample.**
+   The original threshold of 0.005 was far too permissive. On already-good ties the warp
+   would gain 0.006–0.036 correlation while adding 1–8 ms of time-depth error — and
+   every damaging case had a **cycle skip** in the log. The warp was stretching to align
+   a spurious event that the skip had put into the synthetic. Helpful warps gained
+   0.10–0.25; the gap is threefold and clean, so the threshold is 0.05. The lesson
+   outlives the number: *a warp that gains only a little is usually chasing a defect in
+   the log*, and the fix is to repair the log.
+
+With all three in place the measured behaviour is: **0 of 34 cases degraded**, across both
+a well-calibrated regime (where the warp correctly declines to act at all) and a
+localised-sonic-anomaly regime (where it improves 11 of 14). That is a stronger
+guarantee than "improves the correlation", and it is the one worth having.
+
+Two of the three tests would be absent from a system designed around a correlation
+threshold, and both of them exist to catch warps that *improve the correlation*.

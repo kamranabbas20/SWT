@@ -327,6 +327,83 @@ def crosscorrelation_panel(session, dark: bool = False):
     return _prepare(fig, axes, dark)
 
 
+def warp_panel(session, dark: bool = False):
+    """The warp, and the two ways it can be inadmissible.
+
+    Three panels, because a warp cannot be judged by its shape alone:
+
+    * the **shift field** -- what the warp does, coarse pass beside fine;
+    * the **strain** against its limit -- where the warp is pinned, which is
+      where it has been clipped rather than solved;
+    * the **implied velocity change** against the sonic, which is the warp's
+      actual geological claim and the only panel that can say it is wrong.
+
+    A warp that looks smooth and improves the correlation can still be pinned
+    at its limit across most of the log, which means the correction genuinely
+    needed is larger than the permitted velocity change. That is visible here
+    and nowhere else.
+    """
+    auto = getattr(session, "auto", None)
+    if auto is None or auto.warp is None:
+        raise ValueError("no warp has been computed yet")
+
+    warp, guardrail = auto.warp, auto.guardrail
+    fig, axes = plt.subplots(1, 3, figsize=(12, 6))
+
+    axes[0].plot(warp.shift_s * 1e3, warp.twt, color=SYNTHETIC, linewidth=1.2, label="fine")
+    if auto.coarse_warp is not None:
+        axes[0].plot(
+            auto.coarse_warp.shift_s * 1e3, auto.coarse_warp.twt,
+            color=NEUTRAL, linewidth=1.0, linestyle="--", label="coarse (envelope)",
+        )
+    axes[0].axvline(0.0, color=NEUTRAL, linewidth=0.8)
+    axes[0].set_xlabel("shift (ms)")
+    axes[0].set_ylabel("TWT (s)")
+    axes[0].set_title("warp shift field", fontsize=9)
+    axes[0].legend(fontsize=7)
+    axes[0].invert_yaxis()
+
+    strain = warp.strain() * 100.0
+    limit = warp.strain_limit * 100.0
+    axes[1].plot(strain, warp.twt, color=SEISMIC, linewidth=0.8)
+    for sign in (-1, 1):
+        axes[1].axvline(sign * limit, color=SYNTHETIC, linewidth=1.0, linestyle="--")
+    pinned = np.abs(strain) >= 0.95 * limit
+    if np.any(pinned):
+        axes[1].plot(strain[pinned], warp.twt[pinned], ".", color=WARNING, markersize=2)
+    axes[1].set_xlabel("strain (%)")
+    axes[1].set_title(
+        f"strain vs limit -- {warp.saturated_fraction():.0%} pinned", fontsize=9,
+        color=WARNING if warp.saturated_fraction() > 0.5 else _style(dark)["fg"],
+    )
+    axes[1].invert_yaxis()
+
+    axes[2].plot(guardrail.change_percent, guardrail.depth, color=ACCENT, linewidth=0.6)
+    for sign in (-1, 1):
+        axes[2].axvline(sign * guardrail.limit_percent, color=SYNTHETIC,
+                        linewidth=1.0, linestyle="--")
+    for violation in guardrail.worst(8):
+        axes[2].axhspan(violation.start_depth, violation.end_depth,
+                        color=SYNTHETIC, alpha=0.25)
+    axes[2].set_xlabel("implied velocity change vs sonic (%)")
+    axes[2].set_ylabel("TVDSS (m)")
+    axes[2].set_title(
+        f"velocity claim -- max {guardrail.max_change_percent:.1f}%", fontsize=9,
+        color=_style(dark)["fg"] if guardrail.passed else SYNTHETIC,
+    )
+    axes[2].invert_yaxis()
+
+    headline = (
+        auto.verdict() if auto.warp_accepted
+        else f"WARP REJECTED -- {warp.saturated_fraction():.0%} pinned at the strain limit"
+        if warp.saturated_fraction() > 0.5
+        else "WARP REJECTED -- see the tie's verdict for why"
+    )
+    fig.suptitle(headline, color=ACCENT if auto.warp_accepted else SYNTHETIC, fontsize=9)
+    fig.tight_layout()
+    return _prepare(fig, axes, dark)
+
+
 def truth_panel(session, dark: bool = False):
     """Error against ground truth -- synthetic cases only.
 

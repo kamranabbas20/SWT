@@ -71,6 +71,21 @@ if source.startswith("Synthetic"):
         snr = st.slider("signal-to-noise", 1.0, 30.0, 8.0, 0.5)
         skips = st.number_input("cycle skips to inject", 0, 10, 2, 1)
         drift = st.slider("sonic drift (fraction)", 0.0, 0.08, 0.03, 0.005)
+        checkshot_spacing = st.slider("checkshot spacing (m)", 100, 1000, 150, 50)
+        anomaly = st.slider(
+            "localised sonic anomaly (fraction, 0 = off)", 0.0, 0.25, 0.0, 0.01,
+            help=(
+                "A zone where the sonic reads wrong but the earth does not. Smooth "
+                "drift is removed completely by a checkshot drift curve; a localised "
+                "anomaly is not, and it leaves exactly the residual a warp exists to "
+                "correct. Combine with a wide checkshot spacing to see the auto-tie "
+                "earn its place."
+            ),
+        )
+        if anomaly > 0:
+            anomaly_top, anomaly_base = st.slider(
+                "anomaly interval (m TVDSS)", 700, 3200, (1700, 2100), 50
+            )
 
     if st.sidebar.button("Build case", type="primary", use_container_width=True):
         set_session(
@@ -82,6 +97,11 @@ if source.startswith("Synthetic"):
                 signal_to_noise=snr,
                 n_cycle_skips=int(skips),
                 drift_amplitude=drift,
+                checkshot_spacing=float(checkshot_spacing),
+                anomaly_zone=(
+                    (float(anomaly_top), float(anomaly_base), anomaly)
+                    if anomaly > 0 else None
+                ),
             )
         )
         st.rerun()
@@ -197,6 +217,37 @@ iterations = st.sidebar.slider("max iterations", 1, 6, 3, 1)
 deterministic = st.sidebar.checkbox("re-estimate wavelet by least squares", value=True)
 backus_length = st.sidebar.slider("Backus upscaling (m, 0 = off)", 0, 100, 0, 5)
 
+st.sidebar.subheader("5. Auto-tie (warp)")
+use_warp = st.sidebar.checkbox(
+    "stretch and squeeze",
+    value=False,
+    help=(
+        "Runs after the bulk shift and phase scan, never instead of them. The "
+        "warp is kept only if the velocity change it implies is plausible, it is "
+        "not merely clipped to look plausible, and it earns enough correlation to "
+        "justify a degree of freedom per sample."
+    ),
+)
+velocity_limit = st.sidebar.slider(
+    "max velocity change vs sonic (%)", 2.0, 40.0, 15.0, 1.0, disabled=not use_warp,
+    help=(
+        "The one number that matters. It sets both the guardrail's acceptance "
+        "test and the solver's strain limit, so the solver cannot search a region "
+        "the guardrail would reject."
+    ),
+)
+max_warp_shift = st.sidebar.slider(
+    "max warp shift (ms)", 10, 150, 60, 5, disabled=not use_warp
+)
+saturation_limit = st.sidebar.slider(
+    "max fraction pinned at the limit", 0.0, 1.0, 0.5, 0.05, disabled=not use_warp,
+    help=(
+        "A warp pinned at its strain limit over most of the log has been clipped, "
+        "not solved. It passes the velocity check precisely because it was clipped "
+        "to a passing value, so this is a separate test."
+    ),
+)
+
 run = st.sidebar.button("Run pipeline", type="primary", use_container_width=True)
 
 if run:
@@ -208,12 +259,21 @@ if run:
             )
             if use_checkshots and current.checkshots is not None:
                 current.calibrate(knot_spacing_m=knot_spacing or None)
-            current.run_tie(
+            tie_options = dict(
                 wavelet_length_s=wavelet_length / 1e3,
                 max_shift_s=max_shift / 1e3,
                 max_iterations=iterations,
                 deterministic=deterministic,
             )
+            if use_warp:
+                current.run_auto_tie(
+                    velocity_limit_percent=velocity_limit,
+                    max_warp_shift_s=max_warp_shift / 1e3,
+                    max_saturated_fraction=saturation_limit,
+                    **tie_options,
+                )
+            else:
+                current.run_tie(**tie_options)
         st.session_state["error"] = None
     except (SessionError, ValueError) as exc:
         st.session_state["error"] = f"{type(exc).__name__}: {exc}"
@@ -242,14 +302,17 @@ if graded:
         help="rms difference from the forward model's actual time-depth curve",
     )
 
-tabs = st.tabs(
-    ["Tie", "Logs", "Time-depth", "Wavelet", "QC", "Journal"]
-    + (["Truth"] if current.truth else [])
-)
+tab_names = ["Tie", "Logs", "Time-depth", "Wavelet", "QC"]
+if current.auto is not None and current.auto.warp is not None:
+    tab_names.append("Warp")
+tab_names.append("Journal")
+if current.truth:
+    tab_names.append("Truth")
+tabs = dict(zip(tab_names, st.tabs(tab_names)))
 
 dark = dark_mode()
 
-with tabs[0]:
+with tabs["Tie"]:
     if current.result is None:
         st.info("Run the pipeline from the sidebar.")
     else:
@@ -271,7 +334,7 @@ with tabs[0]:
                 "the QC tab before accepting it."
             )
 
-with tabs[1]:
+with tabs["Logs"]:
     if current.sonic_us_per_m is None:
         st.info("No logs loaded.")
     else:
@@ -292,7 +355,7 @@ with tabs[1]:
                     use_container_width=True, hide_index=True,
                 )
 
-with tabs[2]:
+with tabs["Time-depth"]:
     if current.time_depth is None:
         st.info("Build a time-depth model from the sidebar.")
     else:
@@ -320,7 +383,7 @@ with tabs[2]:
                 st.warning("Checkshot intervals with implausible velocities:")
                 st.dataframe(implausible, use_container_width=True, hide_index=True)
 
-with tabs[3]:
+with tabs["Wavelet"]:
     if current.result is None:
         st.info("Run the pipeline to estimate a wavelet.")
     else:
@@ -334,7 +397,7 @@ with tabs[3]:
                 f"{current.truth['wavelet_phase_deg']:+.0f}°."
             )
 
-with tabs[4]:
+with tabs["QC"]:
     if current.result is None:
         st.info("Run the pipeline to compute QC.")
     else:
@@ -352,7 +415,29 @@ with tabs[4]:
             "indistinguishable from noise."
         )
 
-with tabs[5]:
+if "Warp" in tabs:
+    with tabs["Warp"]:
+        auto = current.auto
+        st.pyplot(panels.warp_panel(current, dark=dark), use_container_width=True)
+        if auto.warp_accepted:
+            st.success(auto.verdict())
+        else:
+            st.error(auto.rejection_reason or auto.verdict())
+        st.caption(
+            "A warp has one free parameter per sample, so it can align almost "
+            "anything with almost anything and report a fine correlation. "
+            "Correlation therefore stops being evidence here. What remains is the "
+            "velocity change the warp claims against the sonic \u2014 the third "
+            "panel \u2014 and whether the warp reached that claim or merely got "
+            "clipped to it \u2014 the second."
+        )
+        left, right = st.columns(2)
+        left.subheader("Warp")
+        left.json(auto.warp.summary())
+        right.subheader("Guardrail")
+        right.json(auto.guardrail.summary())
+
+with tabs["Journal"]:
     st.subheader("What was done")
     for entry in current.journal:
         with st.expander(entry["step"]):
@@ -365,7 +450,7 @@ with tabs[5]:
     )
 
 if current.truth:
-    with tabs[6]:
+    with tabs["Truth"]:
         if current.time_depth is None:
             st.info("Build a time-depth model to grade it.")
         else:

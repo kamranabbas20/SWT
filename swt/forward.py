@@ -104,6 +104,7 @@ def make_case(
     n_cycle_skips: int = 0,
     n_spikes: int = 0,
     sonic_noise_fraction: float = 0.005,
+    anomaly_zone: tuple[float, float, float] | None = None,
 ) -> SyntheticCase:
     """Build a synthetic tie problem.
 
@@ -128,6 +129,19 @@ def make_case(
     n_cycle_skips, n_spikes:
         Number of injected sonic cycle skips (a doubling of slowness over a few
         metres) and isolated spikes.  Material for conditioning tests.
+    anomaly_zone:
+        ``(top_m, base_m, fraction)`` -- an interval over which the sonic reads
+        wrong by ``fraction`` while the earth does not, e.g.
+        ``(1800, 2100, 0.10)`` for a 300 m zone where the log is 10% slow.
+
+        This is the failure a **warp** exists to correct, and it is a different
+        shape of problem from ``drift_amplitude``. Smooth drift is removed
+        completely by a checkshot drift curve, however sparse the checkshots,
+        because a smooth function is what a piecewise-linear fit through a few
+        points reconstructs well. A localised anomaly is not: the checkshots
+        either side of it are honoured exactly, the correction is smeared across
+        the whole interval between them, and a localised time error survives
+        into the tie that no bulk shift and no smooth drift curve can reach.
     sonic_noise_fraction:
         Fractional random measurement noise on the sonic.  A small non-zero
         default is deliberate: a *noise-free* log is not a gentler test but a
@@ -181,6 +195,17 @@ def make_case(
     dt_log = velocity_to_slowness(log_vp_true) * (
         1.0 + _drift_profile(log_depth, drift_amplitude)
     )
+    if anomaly_zone is not None:
+        top, bottom, fraction = anomaly_zone
+        if bottom <= top:
+            raise ValueError("anomaly_zone base must be below its top")
+        inside = (log_depth >= top) & (log_depth <= bottom)
+        if not np.any(inside):
+            raise ValueError(
+                f"anomaly_zone {top}-{bottom} m lies outside the logged interval "
+                f"{log_depth[0]:.0f}-{log_depth[-1]:.0f} m"
+            )
+        dt_log = dt_log * np.where(inside, 1.0 + fraction, 1.0)
     if sonic_noise_fraction:
         dt_log = dt_log * (
             1.0 + sonic_noise_fraction * rng.standard_normal(dt_log.size)
@@ -220,6 +245,7 @@ def make_case(
             "n_cycle_skips": n_cycle_skips,
             "n_spikes": n_spikes,
             "sonic_noise_fraction": sonic_noise_fraction,
+            "anomaly_zone": anomaly_zone,
         },
     )
 

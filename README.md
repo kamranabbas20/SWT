@@ -18,8 +18,8 @@ See [`docs/PLAN.md`](docs/PLAN.md) for the full design and roadmap.
 | **M0** Scaffolding, forward model, test harness | done |
 | **M1** Deterministic tie, validated against ground truth | done |
 | **M2** Streamlit UI | done |
-| **M3** Auto-tie: constrained DTW + velocity guardrail | next |
-| **M4** Uncertainty quantification | planned |
+| **M3** Auto-tie: constrained DTW + velocity guardrail | done |
+| **M4** Uncertainty quantification | next |
 | **M5** Claude copilot over the engine | planned |
 
 ## Quick start
@@ -28,7 +28,7 @@ See [`docs/PLAN.md`](docs/PLAN.md) for the full design and roadmap.
 pip install -e ".[dev,app]"
 streamlit run app/streamlit_app.py   # the interactive tie
 python examples/demo_tie.py          # the same tie, headless, graded against truth
-python -m pytest -q                  # 119 tests
+python -m pytest -q                  # 179 tests
 ```
 
 The app opens on a synthetic case builder: choose a static, a wavelet phase, a
@@ -78,7 +78,7 @@ that knows its own answer.
 | `swt.petro` | Impedance, reflectivity, acoustic Backus upscaling |
 | `swt.synth` | Depth→time resampling (anti-aliased) and the convolutional model |
 | `swt.wavelet` | Ricker/Ormsby, statistical, and least-squares deterministic estimation |
-| `swt.tie` | Bulk shift, constant-phase scan, the iteration loop |
+| `swt.tie` | Bulk shift, constant-phase scan, constrained DTW, the velocity guardrail |
 | `swt.qc` | Correlation, NRMS, PEP — and whether any of them is *significant* |
 | `swt.forward` | The synthetic earth with a known answer |
 | `swt.session` | The one mutable tie state — and the copilot's eventual tool surface |
@@ -90,7 +90,7 @@ that boundary: **arrays never cross it** (every method returns compact JSON —
 statistics, intervals, verdicts, never a 16,000-sample curve), and **every
 mutation is journalled**, which is what a tie report is made of.
 
-## Four things this does that most well-tie code does not
+## Five things this does that most well-tie code does not
 
 **Significance testing.** A seismic trace is band-limited, so a 200 ms window of
 10–50 Hz data holds roughly 16 independent numbers, not 100. Correlating two
@@ -116,13 +116,20 @@ loop converges, the next shift search finds nothing, and the time-depth is quiet
 wrong. Every deterministic wavelet is recentred and its offset pushed back into the
 time-depth model, where it stays visible.
 
-Each of these was found by the ground-truth tests, not by inspection — the third
-and fourth were live bugs that produced correlations of 0.995 on a time-depth
-16 ms out.
+**A warp has to earn its place.** Warping is where an auto-tie stops being
+trustworthy: a bulk shift has one free parameter, a warp has one per sample, and
+with that freedom correlation stops being evidence. So a warp is converted back
+into the velocity change it claims against the sonic and must pass three separate
+tests — the claim is plausible (≤15% by default), the warp *reached* that claim
+rather than being clipped to it, and it buys enough correlation to justify the
+freedom. A rejected warp is discarded even when it correlates better.
+
+Each of these was found by the ground-truth tests, not by inspection — three were
+live bugs that produced high correlations on a wrong time-depth.
 
 ## Testing
 
-119 tests, in three tiers:
+179 tests, in four tiers:
 
 - **Ground truth** (`tests/test_ground_truth.py`) — a forward-modelled earth is
   tied, and the recovered time-depth, static and wavelet phase are graded against
@@ -134,6 +141,9 @@ and fourth were live bugs that produced correlations of 0.995 on a time-depth
   docstrings warn about are actually prevented.
 - **Session and panels** (`tests/test_session.py`) — the tool-surface contract
   (ordering, invalidation, JSON-only output) and that every display builds.
+- **Guardrail and auto-tie** (`tests/test_guardrail.py`, `tests/test_autotie.py`) —
+  the velocity arithmetic against hand-built warps, and the property that the
+  warp never degrades the time-depth across both regimes.
 
 ## Data
 
