@@ -307,17 +307,51 @@ after the breakpoint so the cache actually hits.
 
 ## 9. Milestones
 
-| # | Milestone | Done when |
-|---|---|---|
-| **M0** | Scaffolding | package, `pyproject.toml`, pytest, CI, `data/fetch.py`, synthetic generator |
-| **M1** | Deterministic tie, no AI | load → condition → T-D → RC → wavelet → synthetic → manual shift → QC, **validated against synthetic ground truth** |
-| **M2** | Streamlit UI | log panel, T-D + drift, wavelet, synthetic-vs-seismic, QC dashboard, manual anchors |
-| **M3** | Auto-tie | constrained DTW + phase scan + outer loop + velocity guardrail |
-| **M4** | UQ | ensemble, T-D corridor, per-horizon ±ms, multimodality flag |
-| **M5** | Copilot | tool surface, tool runner, streaming chat panel, generated tie report |
+| # | Milestone | Done when | State |
+|---|---|---|---|
+| **M0** | Scaffolding | package, `pyproject.toml`, pytest, `data/fetch.py`, synthetic generator | **done** |
+| **M1** | Deterministic tie, no AI | load → condition → T-D → RC → wavelet → synthetic → manual shift → QC, **validated against synthetic ground truth** | **done** |
+| **M2** | Streamlit UI | log panel, T-D + drift, wavelet, synthetic-vs-seismic, QC dashboard, manual anchors | next |
+| **M3** | Auto-tie | constrained DTW + phase scan + outer loop + velocity guardrail | planned |
+| **M4** | UQ | ensemble, T-D corridor, per-horizon ±ms, multimodality flag | planned |
+| **M5** | Copilot | tool surface, tool runner, streaming chat panel, generated tie report | planned |
 
 M1 is the milestone that matters. Everything after it is leverage on top of a correct
 engine; if M1 is wrong, M3–M5 produce confident nonsense.
+
+### What M1 actually established
+
+Ten random earth models recover the imposed static to within one seismic sample and
+the time-depth to under 3 ms rms, across wavelet phases of 0, ±30, ±60, ±90 and 180
+degrees, statics of 0 to ±20 ms, and signal-to-noise from noise-free down to 2.
+
+More usefully, the ground-truth tests found three defects that a correlation-only
+test could not have — every one of which produced a *high correlation on a wrong
+answer*, which is the exact failure this project is organised against:
+
+1. **The phase scan returned a mismatched phase and synthetic.** `phases[0]` is
+   −180°, but the best-so-far was seeded with the *unrotated* wavelet, so whenever
+   −180° won, the reported phase and the returned synthetic disagreed. The next
+   cross-correlation then compared a trace against its own inverse and picked a side
+   lobe half a period away. Result: correlation 0.995, time-depth 16 ms out.
+2. **Trace-domain coarse alignment cannot survive residual phase.** It locks onto the
+   wrong half-cycle and converts a phase error into a time error that no later phase
+   scan can undo. Coarse alignment now runs on the analytic-signal envelope, which is
+   phase-blind; the sharper trace estimator runs afterwards, once phase is known.
+3. **The least-squares wavelet absorbed residual statics into its own energy offset.**
+   A 128 ms wavelet can move its energy several milliseconds to fit a misaligned
+   synthetic. The loop then converges, the next shift search finds nothing — the error
+   is inside the wavelet — and the time-depth is quietly wrong. Deterministic wavelets
+   are now recentred, with the offset pushed back into the T-D where it stays visible.
+
+Two smaller ones came out of the invariant tests: the despike threshold's robust scale
+collapses to zero on a smooth log (the local median tracks it exactly, so the MAD is
+zero and nothing is ever flagged), and despiking without a width guard eats bed
+boundaries and cycle skips.
+
+The lesson for M3–M5 is the one the plan already asserted, now with evidence: **the
+guardrails are the product**. Three of these five defects would have shipped happily
+under a correlation-threshold acceptance test.
 
 ---
 
