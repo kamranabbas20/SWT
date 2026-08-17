@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "swt"
+version = "0.1.0"
+description = "Smart seismic-to-well tie: a deterministic geophysics core with an AI layer on top"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "lasio>=0.31",
+    "segyio>=1.9",
+]
+
+[project.optional-dependencies]
+app = ["streamlit>=1.30", "plotly>=5.18"]
+copilot = ["anthropic>=0.40", "pydantic>=2.0"]
+dev = ["pytest>=7.4"]
+
+[tool.setuptools.packages.find]
+include = ["swt*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["error::RuntimeWarning"]
