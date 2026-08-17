@@ -40,8 +40,8 @@ from ..units import slowness_to_velocity
 from ..wavelet.core import Wavelet
 from ..wavelet.deterministic import deterministic_wavelet
 from ..wavelet.statistical import statistical_wavelet
-from .align import apply_bulk_shift, find_bulk_shift
-from .phase import scan_constant_phase
+from .align import BulkShift, apply_bulk_shift, find_bulk_shift
+from .phase import PhaseScan, scan_constant_phase
 
 
 @dataclass(frozen=True)
@@ -59,6 +59,12 @@ class TieResult:
     phase_deg: float
     iterations: int
     history: list[dict] = field(default_factory=list)
+    #: The final constant-phase scan, kept for the ambiguity display -- the
+    #: shape of the curve says more than its peak does.
+    phase_scan: "PhaseScan | None" = None
+    #: The final bulk-shift search, likewise: a second peak one period away is
+    #: a cycle-skip risk that a single reported shift hides.
+    shift_search: "BulkShift | None" = None
 
     def summary(self) -> dict:
         """Compact JSON-safe summary -- the shape the copilot tools return."""
@@ -211,6 +217,8 @@ def tie(
             phase_deg=phase_deg,
             iterations=iteration,
             history=history,
+            phase_scan=scan,
+            shift_search=fine,
         )
 
         if metrics.correlation - previous_correlation < tolerance:

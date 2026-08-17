@@ -16,9 +16,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-app = ["streamlit>=1.30", "plotly>=5.18"]
+app = ["streamlit>=1.30", "matplotlib>=3.7"]
 copilot = ["anthropic>=0.40", "pydantic>=2.0"]
-dev = ["pytest>=7.4"]
+dev = ["pytest>=7.4", "matplotlib>=3.7"]
 
 [tool.setuptools.packages.find]
 include = ["swt*"]

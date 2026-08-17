@@ -17,18 +17,25 @@ See [`docs/PLAN.md`](docs/PLAN.md) for the full design and roadmap.
 |---|---|
 | **M0** Scaffolding, forward model, test harness | done |
 | **M1** Deterministic tie, validated against ground truth | done |
-| **M2** Streamlit UI | next |
-| **M3** Auto-tie: constrained DTW + velocity guardrail | planned |
+| **M2** Streamlit UI | done |
+| **M3** Auto-tie: constrained DTW + velocity guardrail | next |
 | **M4** Uncertainty quantification | planned |
 | **M5** Claude copilot over the engine | planned |
 
 ## Quick start
 
 ```bash
-pip install -e ".[dev]"
-python examples/demo_tie.py      # end-to-end tie on synthetic data with a known answer
-python -m pytest -q              # 102 tests
+pip install -e ".[dev,app]"
+streamlit run app/streamlit_app.py   # the interactive tie
+python examples/demo_tie.py          # the same tie, headless, graded against truth
+python -m pytest -q                  # 119 tests
 ```
+
+The app opens on a synthetic case builder: choose a static, a wavelet phase, a
+signal-to-noise ratio and how many cycle skips to inject, then run the pipeline
+and watch each stage. Because the case knows its own answer, the header carries
+an **error vs truth** metric next to the correlation — the two disagree more
+often than is comfortable, which is the point.
 
 `demo_tie.py` builds a forward-modelled earth, hands the pipeline only what an
 interpreter would actually have — a drifted sonic, a density log, checkshots and
@@ -74,6 +81,14 @@ that knows its own answer.
 | `swt.tie` | Bulk shift, constant-phase scan, the iteration loop |
 | `swt.qc` | Correlation, NRMS, PEP — and whether any of them is *significant* |
 | `swt.forward` | The synthetic earth with a known answer |
+| `swt.session` | The one mutable tie state — and the copilot's eventual tool surface |
+| `swt.viz` | Matplotlib panels, shared by the app, notebooks and reports |
+
+`TieSession` is the seam between the deterministic core and everything above it.
+The UI drives it; the copilot will drive the *same* methods. Two rules hold at
+that boundary: **arrays never cross it** (every method returns compact JSON —
+statistics, intervals, verdicts, never a 16,000-sample curve), and **every
+mutation is journalled**, which is what a tie report is made of.
 
 ## Four things this does that most well-tie code does not
 
@@ -107,7 +122,7 @@ and fourth were live bugs that produced correlations of 0.995 on a time-depth
 
 ## Testing
 
-102 tests, in two tiers:
+119 tests, in three tiers:
 
 - **Ground truth** (`tests/test_ground_truth.py`) — a forward-modelled earth is
   tied, and the recovered time-depth, static and wavelet phase are graded against
@@ -117,6 +132,8 @@ and fourth were live bugs that produced correlations of 0.995 on a time-depth
 - **Invariants** (`tests/test_invariants.py`) — the guarantees the rest of the
   package relies on, and, in several cases, proof that the failure modes the
   docstrings warn about are actually prevented.
+- **Session and panels** (`tests/test_session.py`) — the tool-surface contract
+  (ordering, invalidation, JSON-only output) and that every display builds.
 
 ## Data
 
