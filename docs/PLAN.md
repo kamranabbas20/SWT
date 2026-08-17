@@ -311,8 +311,8 @@ after the breakpoint so the cache actually hits.
 |---|---|---|---|
 | **M0** | Scaffolding | package, `pyproject.toml`, pytest, `data/fetch.py`, synthetic generator | **done** |
 | **M1** | Deterministic tie, no AI | load → condition → T-D → RC → wavelet → synthetic → manual shift → QC, **validated against synthetic ground truth** | **done** |
-| **M2** | Streamlit UI | log panel, T-D + drift, wavelet, synthetic-vs-seismic, QC dashboard, manual anchors | next |
-| **M3** | Auto-tie | constrained DTW + phase scan + outer loop + velocity guardrail | planned |
+| **M2** | Streamlit UI | log panel, T-D + drift, wavelet, synthetic-vs-seismic, QC dashboard | **done** |
+| **M3** | Auto-tie | constrained DTW + phase scan + outer loop + velocity guardrail | next |
 | **M4** | UQ | ensemble, T-D corridor, per-horizon ±ms, multimodality flag | planned |
 | **M5** | Copilot | tool surface, tool runner, streaming chat panel, generated tie report | planned |
 
