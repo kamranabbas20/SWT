@@ -248,3 +248,107 @@ def _aperture_indices(index: int, aperture: int, n_traces: int) -> list[int]:
     lo = max(0, index - half)
     hi = min(n_traces, index + half + 1)
     return list(range(lo, hi))
+
+def extract_along_path(
+    path: str,
+    deviation,
+    time_depth,
+    aperture: int = 1,
+    label: str = "seismic",
+) -> Trace:
+    """Extract a composite trace that follows a deviated well.
+
+    A deviated well is not under its own wellhead. By 3 km measured depth it can
+    be a kilometre away laterally, which at typical bin sizes is tens of traces
+    from where a single-location extraction would look. Tying such a well to the
+    trace at its surface position compares the log against rock it never
+    penetrated -- and the result is not obviously broken, merely mediocre, which
+    is the worst way for it to fail.
+
+    So the trace is assembled sample by sample: at each output time the well is
+    at some TVDSS, and therefore at some (x, y), and the amplitude is taken from
+    the trace nearest *that* point.
+
+    **The circularity is real and is handled by iteration, not by pretending.**
+    Knowing where the well is at time *t* requires a time-depth model, which is
+    what the tie produces. So the first extraction uses whatever model exists --
+    normally the checkshot-calibrated sonic -- and the extraction may be repeated
+    after the tie updates it. In practice one pass suffices: the lateral position
+    changes slowly with time, so a time-depth error of tens of milliseconds moves
+    the well by metres, usually well inside one bin.
+
+    Parameters
+    ----------
+    deviation:
+        The well path, with ``wellhead_x``/``wellhead_y`` set to the surface
+        location in the survey's coordinate system.
+    time_depth:
+        The model used to convert each output time to a depth, and so to a
+        position.
+    aperture:
+        Traces per side to average at each position. Averaging lifts
+        signal-to-noise and smooths real detail; 1 (no averaging) is the default
+        because it should be a deliberate choice.
+
+    Returns
+    -------
+    Trace
+        With ``meta`` recording how many distinct traces contributed and how far
+        the well actually travelled -- the numbers that say whether following the
+        path mattered at all.
+    """
+    import segyio
+
+    if aperture < 1:
+        raise ValueError("aperture must be at least 1")
+
+    with segyio.open(path, "r", ignore_geometry=True) as handle:
+        samples = np.asarray(handle.samples, dtype=float)
+        if samples.size < 2:
+            raise ValueError(f"{path} has fewer than two time samples")
+        twt = samples / 1000.0
+
+        scalar = int(handle.header[0][segyio.TraceField.SourceGroupScalar])
+        trace_x, trace_y = _coordinates(handle, scalar)
+        if np.all(trace_x == trace_x[0]) and np.all(trace_y == trace_y[0]):
+            raise ValueError(
+                f"{path} reports one coordinate for every trace: the geometry is "
+                "missing from the headers, so a well path cannot be followed. "
+                "Extract by inline/crossline instead, or supply the geometry."
+            )
+
+        # Where is the well at each output time?
+        depth = time_depth.depth_at(twt)
+        well_x, well_y = deviation.position_at_tvdss(depth)
+
+        # Nearest trace per sample, then read each needed trace exactly once.
+        distance = np.hypot(
+            trace_x[None, :] - well_x[:, None], trace_y[None, :] - well_y[:, None]
+        )
+        nearest = np.argmin(distance, axis=1)
+        offset = distance[np.arange(nearest.size), nearest]
+
+        needed = {}
+        for index in np.unique(nearest):
+            indices = _aperture_indices(int(index), aperture, handle.tracecount)
+            needed[int(index)] = np.mean(
+                [np.asarray(handle.trace[i], dtype=float) for i in indices], axis=0
+            )
+
+        amplitude = np.array([needed[int(j)][i] for i, j in enumerate(nearest)])
+
+    travelled = float(np.hypot(np.ptp(well_x), np.ptp(well_y)))
+    return Trace(
+        twt=twt,
+        amplitude=amplitude,
+        label=label,
+        meta={
+            "path": path,
+            "extraction": "along well path",
+            "n_distinct_traces": int(np.unique(nearest).size),
+            "lateral_travel_m": round(travelled, 1),
+            "max_offset_from_trace_m": round(float(np.max(offset)), 2),
+            "aperture": aperture,
+            "time_depth_provenance": time_depth.provenance,
+        },
+    )

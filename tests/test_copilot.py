@@ -288,4 +288,11 @@ class TestLoop:
         """The UI constructs a Copilot on every rerun; that must not need a key."""
         copilot = Copilot(session)
         assert copilot._client is None
-        assert len(copilot.tools) == 14
+
+        # Assert the surface by name, not by count -- a count assertion breaks
+        # every time a tool is added, which trains people to bump the number
+        # without reading what changed.
+        names = {tool.name for tool in copilot.tools}
+        assert MUTATING <= names
+        assert {"get_state", "get_tie_quality", "describe_interval",
+                "describe_deviation"} <= names

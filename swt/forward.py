@@ -63,6 +63,12 @@ class SyntheticCase:
     seed: int
     params: dict = field(default_factory=dict)
 
+    #: Present only for deviated cases.  The log is recorded against measured
+    #: depth; ``log_depth_tvdss`` is the same samples converted through the
+    #: survey, and the two differ by hundreds of metres in a deviated well.
+    log_depth_md_m: np.ndarray | None = None
+    deviation: object | None = None
+
     @property
     def log_top_tvdss(self) -> float:
         return float(self.log_depth_tvdss[0])
@@ -105,6 +111,7 @@ def make_case(
     n_spikes: int = 0,
     sonic_noise_fraction: float = 0.005,
     anomaly_zone: tuple[float, float, float] | None = None,
+    deviation=None,
 ) -> SyntheticCase:
     """Build a synthetic tie problem.
 
@@ -142,6 +149,17 @@ def make_case(
         either side of it are honoured exactly, the correction is smeared across
         the whole interval between them, and a localised time error survives
         into the tie that no bulk shift and no smooth drift curve can reach.
+    deviation:
+        A :class:`~swt.io.deviation.Deviation` survey.  When given, the log is
+        sampled along *measured depth* -- as a real log is -- and
+        ``log_depth_tvdss`` holds the same samples converted through the survey.
+
+        This is what makes the deviated-well failure reproducible. In a well with
+        800 m of departure, MD and TVDSS differ by hundreds of metres, and a
+        sonic integrated against MD produces a time-depth curve stretched by
+        exactly that difference. Nothing downstream recognises the error for what
+        it is: the drift curve absorbs part of it, the bulk shift absorbs more,
+        and the tie ends up plausible and wrong.
     sonic_noise_fraction:
         Fractional random measurement noise on the sonic.  A small non-zero
         default is deliberate: a *noise-free* log is not a gentler test but a
@@ -187,10 +205,30 @@ def make_case(
 
     # The logged interval, and the sonic the interpreter actually receives.
     base = z_max if log_base is None else min(log_base, z_max)
-    logged = (depth >= log_top) & (depth <= base)
-    log_depth = depth[logged]
-    log_vp_true = vp_true[logged]
-    log_rho = rho_true[logged]
+
+    log_md = None
+    if deviation is None:
+        logged = (depth >= log_top) & (depth <= base)
+        log_depth = depth[logged]
+        log_vp_true = vp_true[logged]
+        log_rho = rho_true[logged]
+    else:
+        # A real log is sampled evenly along the borehole, not along TVD. Build
+        # the MD axis first, then convert through the survey to find what depth
+        # -- and therefore what rock -- each sample actually sat in.
+        md_top = float(deviation.md_at_tvdss(np.array([log_top]))[0])
+        md_base = float(deviation.md_at_tvdss(np.array([base]))[0])
+        log_md = np.arange(md_top, md_base, dz)
+        log_depth = deviation.tvdss_at_md(log_md)
+        inside = (log_depth >= depth[0]) & (log_depth <= depth[-1])
+        log_md, log_depth = log_md[inside], log_depth[inside]
+        if log_depth.size < 2 or np.any(np.diff(log_depth) <= 0):
+            raise ValueError(
+                "the deviation survey does not give a strictly increasing TVDSS "
+                "over the logged interval; a tie needs a well that goes down"
+            )
+        log_vp_true = np.interp(log_depth, depth, vp_true)
+        log_rho = np.interp(log_depth, depth, rho_true)
 
     dt_log = velocity_to_slowness(log_vp_true) * (
         1.0 + _drift_profile(log_depth, drift_amplitude)
@@ -246,7 +284,10 @@ def make_case(
             "n_spikes": n_spikes,
             "sonic_noise_fraction": sonic_noise_fraction,
             "anomaly_zone": anomaly_zone,
+            "deviated": deviation is not None,
         },
+        log_depth_md_m=log_md,
+        deviation=deviation,
     )
 
 

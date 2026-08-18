@@ -28,7 +28,7 @@ See [`docs/PLAN.md`](docs/PLAN.md) for the full design and roadmap.
 pip install -e ".[dev,app]"
 streamlit run app/streamlit_app.py   # the interactive tie
 python examples/demo_tie.py          # the same tie, headless, graded against truth
-python -m pytest -q                  # 222 tests
+python -m pytest -q                  # 235 tests
 ```
 
 The app opens on a synthetic case builder: choose a static, a wavelet phase, a
@@ -72,7 +72,7 @@ that knows its own answer.
 | Module | Job |
 |---|---|
 | `swt.units` | Unit detection. Refuses to guess — a sonic read as µs/m when it is µs/ft is wrong by 3.28× and still looks plausible |
-| `swt.io` | LAS, SEG-Y, checkshots, deviation surveys (minimum curvature) |
+| `swt.io` | LAS, SEG-Y, checkshots, deviation surveys, path-following extraction |
 | `swt.logs.condition` | Despiking, cycle-skip and bad-hole detection, gap filling — nothing silently edited |
 | `swt.timedepth` | Sonic integration, checkshot drift calibration, and the strict-monotonicity invariant |
 | `swt.petro` | Impedance, reflectivity, acoustic Backus upscaling |
@@ -92,12 +92,32 @@ that boundary: **arrays never cross it** (every method returns compact JSON —
 statistics, intervals, verdicts, never a 16,000-sample curve), and **every
 mutation is journalled**, which is what a tie report is made of.
 
+## Deviated wells
+
+A deviated well breaks a tie in two independent ways, and both are silent.
+
+The log is recorded against **measured depth**; the seismic is indexed by **true
+vertical depth**. In a well with 800 m of departure those differ by hundreds of
+metres, and a sonic integrated against MD stretches the time-depth curve by
+exactly that difference. Nothing downstream flags it — the drift curve absorbs
+part, the bulk shift absorbs more, and the tie ends up plausible and wrong. The
+test suite demonstrates this rather than asserting it: on an isolated case, MD
+integration is 150+ ms out where TVDSS integration is exact.
+
+And the well is **not under its wellhead**. `extract_along_path` assembles the
+trace sample by sample — at each output time the well is at some TVDSS, hence
+some (x, y), and the amplitude comes from the trace nearest *that* point. The
+circularity (knowing where the well is at time *t* needs the time-depth model the
+tie produces) is handled by iterating, not by pretending: extract, tie, re-extract.
+One pass suffices, because lateral position changes slowly enough with time that
+tens of milliseconds of error moves the well a few metres.
+
 ## The copilot
 
 `swt.copilot` wires Claude (`claude-opus-5`, adaptive thinking) to a session
 through **the same methods the UI calls** — there is no second implementation of
 the pipeline to drift out of step, and no path by which the model touches a numpy
-array. Fourteen tools: eight read-only, six that change the tie.
+array. Fifteen tools: nine read-only, six that change the tie.
 
 Its job is diagnosis, not narration. A dashboard already shows every number it can
 see; what it adds is *"correlation 0.42, the drift steps 8 ms at 2100 m and DT
@@ -165,7 +185,7 @@ live bugs that produced high correlations on a wrong time-depth.
 
 ## Testing
 
-222 tests, in six tiers:
+235 tests, in seven tiers:
 
 - **Ground truth** (`tests/test_ground_truth.py`) — a forward-modelled earth is
   tied, and the recovered time-depth, static and wavelet phase are graded against
@@ -184,6 +204,9 @@ live bugs that produced high correlations on a wrong time-depth.
   An uncertainty estimate is only worth reporting if it is calibrated.
 - **Copilot** (`tests/test_copilot.py`) — the tool surface, the permit gate and
   the loop, driven by a stub client executing real tools against a real session.
+- **Deviated wells** (`tests/test_deviated.py`) — the survey inverse, and
+  path-following extraction verified trace-by-trace against a synthetic volume
+  whose every trace is individually identifiable.
 
 ## Data
 

@@ -122,6 +122,20 @@ else:
             well_y = st.number_input("well Y", value=0.0, format="%.2f")
             inline = xline = None
         kb = st.number_input("KB elevation (m)", value=0.0, step=1.0)
+        deviation_path = st.text_input("Deviation survey CSV (MD, INC, AZI)", "")
+        follow_path = st.checkbox(
+            "follow the well path when extracting",
+            value=False,
+            disabled=not deviation_path,
+            help=(
+                "A deviated well is not under its wellhead. By 3 km measured "
+                "depth it can be a kilometre away, which is tens of traces from "
+                "where a single-location extraction looks. This extracts the "
+                "trace at the well's position at each depth instead \u2014 done "
+                "as a second pass, because knowing where the well is at a given "
+                "time needs a time-depth model."
+            ),
+        )
 
     if segy_path and st.sidebar.button("Inspect SEG-Y", use_container_width=True):
         try:
@@ -137,16 +151,29 @@ else:
             new = TieSession(name=Path(las_path).stem if las_path else "well")
             logs = load_las(las_path)
             new.logs = logs
-            # Vertical-well assumption until a deviation survey is supplied.
-            new.depth_tvdss = logs.depth_md_m - kb
             new.sonic_us_per_m = logs.sonic_us_per_m
             new.density_g_cm3 = logs.density_g_cm3
+            if deviation_path:
+                from swt.io.deviation import load_csv as load_deviation
+
+                survey = load_deviation(
+                    deviation_path, kb_elevation_m=kb,
+                    wellhead_x=well_x or 0.0, wellhead_y=well_y or 0.0,
+                )
+                new.set_deviation(survey, md_m=logs.depth_md_m)
+                st.sidebar.json(survey.summary())
+            else:
+                # Vertical-well assumption. Wrong for any deviated well, and
+                # wrong by the borehole's excess length.
+                new.depth_tvdss = logs.depth_md_m - kb
             if checkshot_path:
                 new.checkshots = load_csv(checkshot_path)
             if segy_path:
                 new.seismic = extract_trace(
                     segy_path, x=well_x, y=well_y, inline=inline, xline=xline
                 )
+            st.session_state["segy_path"] = segy_path
+            st.session_state["follow_path"] = bool(follow_path and deviation_path)
             set_session(new)
             st.rerun()
         except Exception as exc:  # noqa: BLE001 - surfaced to the user
@@ -287,6 +314,17 @@ if run:
                 max_iterations=iterations,
                 deterministic=deterministic,
             )
+            # A deviated well needs the trace that follows the borehole, and
+            # finding it needs a time-depth model -- so the path is followed on a
+            # second pass, once the first tie has produced one.
+            if (
+                st.session_state.get("follow_path")
+                and current.deviation is not None
+                and st.session_state.get("segy_path")
+            ):
+                current.run_tie(**tie_options)
+                current.reextract_along_path(st.session_state["segy_path"])
+
             if use_warp:
                 current.run_auto_tie(
                     velocity_limit_percent=velocity_limit,

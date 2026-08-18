@@ -503,3 +503,33 @@ client that executes real tools against a real session, the last in the browser.
 request has ever been made to the actual service, because this environment has no
 Anthropic credentials. `Copilot.ask` should be treated as unproven until it has been run
 once with a key.
+
+
+### Deviated wells
+
+Two failures, both silent, both now closed.
+
+**MD versus TVDSS.** The log is on measured depth and the seismic on true vertical
+depth. `TieSession.set_deviation` converts the log's axis through the survey; the forward
+model can now generate a genuinely deviated case (the log sampled along MD, as a real log
+is), so the failure is reproducible. On an isolated case — no drift, no log noise, true
+time at the log top, so the depth axis is the *only* difference — MD integration is over
+150 ms out where TVDSS integration is exact. Tying such a well correctly then reaches
+0.42 ms rms.
+
+**The well is not under its wellhead.** `extract_along_path` follows the borehole: at each
+output time the well is at some TVDSS, hence some (x, y), and the amplitude comes from the
+nearest trace to that point. Verified against a synthetic volume whose every trace is a
+distinct constant, so the test checks *which trace supplied each sample*, not merely that
+numbers came out.
+
+The circularity is real — knowing where the well is at time *t* requires the time-depth
+model that the tie produces — and it is handled by iterating rather than by assuming it
+away: extract at the wellhead, tie, re-extract along the path, tie again. One iteration
+suffices because lateral position changes slowly with time; tens of milliseconds of
+time-depth error moves the well a few metres, usually inside one bin. The docstring says
+so, and says why, rather than leaving a future reader to wonder whether it was considered.
+
+The survey inverse (`md_at_tvdss`) only exists where TVD increases with MD. Horizontal
+and dropping sections are excluded from the interpolation, and a well that never goes down
+raises rather than returning a plausible number.

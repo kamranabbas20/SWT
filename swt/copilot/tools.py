@@ -159,6 +159,34 @@ def build_tools(session: TieSession, permit: Permit | None = None) -> list:
             return _error(exc)
 
     @beta_tool
+    def describe_deviation() -> str:
+        """Describe the well path: how deviated it is, how far the borehole
+        departs from the wellhead, and how much measured depth exceeds true
+        vertical depth. A large separation means the log and the seismic are on
+        very different depth axes, and that the trace to tie against changes with
+        depth."""
+        try:
+            if session.deviation is None:
+                return _ok({
+                    "loaded": False,
+                    "note": (
+                        "No deviation survey. The well is being treated as "
+                        "vertical, which is wrong for any deviated well and puts "
+                        "the time-depth curve out by the borehole's excess length."
+                    ),
+                })
+            payload = dict(session.deviation.summary())
+            if session.depth_tvdss is not None and session.logs is not None:
+                md = session.logs.depth_md_m
+                if md is not None and md.size == session.depth_tvdss.size:
+                    payload["md_minus_tvdss_at_base_m"] = round(
+                        float(md[-1] - session.depth_tvdss[-1]), 1
+                    )
+            return _ok(payload)
+        except Exception as exc:  # noqa: BLE001
+            return _error(exc)
+
+    @beta_tool
     def describe_seismic() -> str:
         """Describe the extracted seismic trace: time range, sample interval, and
         where it came from."""
@@ -453,6 +481,7 @@ def build_tools(session: TieSession, permit: Permit | None = None) -> list:
 
     return [
         get_state, describe_logs, describe_checkshots, describe_seismic,
+        describe_deviation,
         get_tie_quality, describe_interval, get_uncertainty, get_journal,
         condition_logs, build_time_depth, calibrate_to_checkshots,
         run_tie, run_auto_tie, run_uncertainty,

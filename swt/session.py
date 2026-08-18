@@ -106,6 +106,70 @@ class TieSession:
         }})
         return session
 
+    def set_deviation(self, deviation: Deviation, md_m: np.ndarray | None = None) -> dict:
+        """Put the log on a TVDSS axis using a deviation survey.
+
+        The log is recorded against measured depth; everything downstream works
+        in TVDSS. In a deviated well those differ by hundreds of metres, and
+        integrating a sonic against MD stretches the time-depth curve by exactly
+        that difference -- an error the drift curve and the bulk shift will
+        partly absorb, leaving a tie that is plausible and wrong.
+
+        Parameters
+        ----------
+        md_m:
+            The log's measured-depth axis. Defaults to the LAS file's own depth
+            curve when logs were loaded from one.
+        """
+        if md_m is None:
+            if self.logs is None or self.logs.depth_md_m is None:
+                raise SessionError(
+                    "no measured-depth axis available; pass md_m explicitly"
+                )
+            md_m = self.logs.depth_md_m
+        md = np.asarray(md_m, dtype=float)
+
+        tvdss = deviation.tvdss_at_md(md)
+        if tvdss.size < 2 or np.any(np.diff(tvdss) <= 0):
+            raise SessionError(
+                f"{deviation.name}: TVDSS does not increase monotonically over the "
+                "logged interval -- the well levels off or rises within the log, "
+                "and a tie needs a well that goes down through it."
+            )
+
+        self.deviation = deviation
+        self.depth_tvdss = tvdss
+        self.time_depth = self.drift = self.result = self.auto = self.ensemble = None
+
+        return self._record("set deviation", {
+            **deviation.summary(),
+            "md_range_m": [round(float(md[0]), 1), round(float(md[-1]), 1)],
+            "tvdss_range_m": [round(float(tvdss[0]), 1), round(float(tvdss[-1]), 1)],
+            "md_minus_tvdss_at_base_m": round(float(md[-1] - tvdss[-1]), 1),
+        })
+
+    def reextract_along_path(self, segy_path: str, aperture: int = 1) -> dict:
+        """Re-extract the seismic following the borehole, using the current T-D.
+
+        A deviated well is not under its wellhead, so the trace it should be tied
+        to changes with depth. Knowing *where* the well is at a given time needs a
+        time-depth model, which is what the tie produces -- so this is run after a
+        first pass and the tie repeated. One iteration is normally enough: lateral
+        position changes slowly with time, so a time-depth error of tens of
+        milliseconds moves the well by metres, usually inside a single bin.
+        """
+        from .io.segy import extract_along_path
+
+        if self.deviation is None:
+            raise SessionError("no deviation survey loaded; nothing to follow")
+        self._require("time_depth", "build a time-depth model before following the path")
+
+        self.seismic = extract_along_path(
+            segy_path, self.deviation, self.time_depth, aperture=aperture
+        )
+        self.result = self.auto = self.ensemble = None
+        return self._record("re-extract along path", dict(self.seismic.meta))
+
     # -- pipeline steps -----------------------------------------------------
 
     def condition(
@@ -322,6 +386,9 @@ class TieSession:
             "has_logs": self.sonic_us_per_m is not None,
             "has_checkshots": self.checkshots is not None,
             "has_seismic": self.seismic is not None,
+            "deviated": (
+                None if self.deviation is None else not self.deviation.is_vertical
+            ),
             "depth_range_m": (
                 [round(float(self.depth_tvdss[0]), 1), round(float(self.depth_tvdss[-1]), 1)]
                 if self.depth_tvdss is not None else None
