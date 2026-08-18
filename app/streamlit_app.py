@@ -114,8 +114,17 @@ else:
         st.caption("Addressing the trace")
         by_line = st.checkbox("address by inline/crossline", value=False)
         if by_line:
-            inline = st.number_input("inline", value=0, step=1)
-            xline = st.number_input("crossline", value=0, step=1)
+            # Seeded from the survey's own middle rather than 0, which is never a
+            # valid line number -- so the first Load cannot fail on a placeholder.
+            centre = st.session_state.get("line_centre", (0, 0))
+            inline = st.number_input("inline", value=int(centre[0]), step=1)
+            xline = st.number_input("crossline", value=int(centre[1]), step=1)
+            st.caption(
+                "Run **Inspect SEG-Y** first to seed these from the survey's "
+                "actual range. Coordinates are the better route where the LAS "
+                "carries them -- a line number picked at random is a real "
+                "location, just not the well's."
+            )
             well_x = well_y = None
         else:
             well_x = st.number_input("well X", value=0.0, format="%.2f")
@@ -140,6 +149,10 @@ else:
     if segy_path and st.sidebar.button("Inspect SEG-Y", use_container_width=True):
         try:
             info = survey_info(segy_path)
+            if info.inline_range and info.xline_range:
+                st.session_state["line_centre"] = (
+                    sum(info.inline_range) // 2, sum(info.xline_range) // 2
+                )
             st.sidebar.json(info.summary())
             for warning in info.warnings():
                 st.sidebar.warning(warning)
