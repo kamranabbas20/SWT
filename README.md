@@ -3,6 +3,12 @@
 A seismic-to-well tie engine with a deterministic geophysics core and an AI layer
 on top.
 
+![A synthetic seismogram tied to seismic data](docs/images/tie.png)
+
+*Reflectivity from the well, the synthetic it produces, the recorded seismic, and
+what is left over. The residual is drawn at the same amplitude scale as the data,
+so its size means something.*
+
 ---
 
 ## What problem does this solve?
@@ -141,6 +147,8 @@ filling. **Nothing is silently edited**: every routine returns the corrected log
 *and* a report of what it changed and where. A single 4 m cycle skip adds a few
 milliseconds to every sample below it and tilts the whole tie.
 
+![Time-depth curve, drift at the checkshots, and interval velocity](docs/images/time_depth.png)
+
 **`swt.timedepth`** — Integrates the sonic into a time-depth curve and calibrates
 it onto checkshots via a drift curve. Enforces one hard invariant: **time must
 increase strictly with depth**. A non-monotonic time-depth curve is not merely
@@ -208,6 +216,12 @@ its own energy several milliseconds to fit a misaligned synthetic. The loop then
 converges, the next shift search finds nothing, and the time-depth is quietly
 wrong. Every deterministic wavelet is recentred and its offset pushed back into
 the time-depth model, where it stays visible.
+
+![The warp's shift field, its strain against the limit, and the velocity change it claims](docs/images/warp.png)
+
+*A warp is judged on the third panel — the velocity change it claims against the
+sonic — and on the second, which shows whether it reached that claim or was merely
+clipped to it.*
 
 **5. A warp must earn its place.** Warping is where an auto-tie stops being
 trustworthy: a bulk shift has one free parameter, a warp has one *per sample*, and
