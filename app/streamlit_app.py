@@ -340,6 +340,7 @@ if current.auto is not None and current.auto.warp is not None:
     tab_names.append("Warp")
 if current.ensemble is not None and current.ensemble.members:
     tab_names.append("Uncertainty")
+tab_names.append("Copilot")
 tab_names.append("Journal")
 if current.truth:
     tab_names.append("Truth")
@@ -499,6 +500,89 @@ if "Uncertainty" in tabs:
             "is why the corridor carries a resolution floor and why this is a "
             "precision estimate, not an accuracy one."
         )
+
+if "Copilot" in tabs:
+    with tabs["Copilot"]:
+        st.caption(
+            "Claude, wired to this session through the same methods the sidebar "
+            "calls. It reads the engine's own QC \u2014 including the significance "
+            "verdict and any warp rejection \u2014 and its job is diagnosis, not "
+            "restating numbers you can already see."
+        )
+
+        allow_changes = st.toggle(
+            "let the copilot change the tie",
+            value=False,
+            help=(
+                "Off, it can look but not touch: any call that would change the "
+                "tie is refused and it must explain what it wanted to do. On, it "
+                "can run the pipeline. The engine's own guardrails still apply "
+                "either way \u2014 it cannot exceed the velocity limit or invert "
+                "the time-depth."
+            ),
+        )
+
+        if "copilot_history" not in st.session_state:
+            st.session_state["copilot_history"] = []
+
+        for entry in st.session_state["copilot_history"]:
+            with st.chat_message(entry["role"]):
+                st.markdown(entry["text"])
+                if entry.get("tools"):
+                    st.caption("tools: " + ", ".join(entry["tools"]))
+
+        question = st.chat_input("Ask about this tie...")
+        report = st.button("Write the tie report")
+
+        if question or report:
+            try:
+                from swt.copilot.agent import Copilot
+
+                copilot = st.session_state.get("copilot")
+                if copilot is None or copilot.session is not current:
+                    copilot = Copilot(current, allow_changes=allow_changes)
+                    st.session_state["copilot"] = copilot
+                copilot.permit.allow = allow_changes
+
+                prompt = question or "Write the tie report."
+                st.session_state["copilot_history"].append(
+                    {"role": "user", "text": prompt}
+                )
+                with st.spinner("Thinking..."):
+                    turn = copilot.write_report() if report else copilot.ask(question)
+                st.session_state["copilot_history"].append({
+                    "role": "assistant",
+                    "text": turn.text or "_(no text returned)_",
+                    "tools": [c["name"] for c in turn.tool_calls],
+                })
+                st.rerun()
+            except Exception as exc:  # noqa: BLE001 - surfaced to the user
+                text = str(exc).lower()
+                missing_credentials = (
+                    "authentication" in text or "api_key" in text or "api key" in text
+                )
+                if missing_credentials:
+                    st.info(
+                        "The copilot needs Anthropic credentials. Set "
+                        "`ANTHROPIC_API_KEY` in the environment, or run "
+                        "`ant auth login`, then reload. Everything else in SWT "
+                        "works without them."
+                    )
+                else:
+                    st.error(f"{type(exc).__name__}: {exc}")
+
+        denials = [
+            d for d in (st.session_state.get("copilot").permit_log()
+                        if st.session_state.get("copilot") else [])
+            if not d["allowed"]
+        ]
+        if denials:
+            with st.expander(f"{len(denials)} change(s) the copilot was stopped from making"):
+                st.dataframe(denials, use_container_width=True, hide_index=True)
+                st.caption(
+                    "A refused call changes nothing, so the journal never records "
+                    "it \u2014 but what the copilot *wanted* to do is worth keeping."
+                )
 
 with tabs["Journal"]:
     st.subheader("What was done")

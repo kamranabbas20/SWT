@@ -314,7 +314,7 @@ after the breakpoint so the cache actually hits.
 | **M2** | Streamlit UI | log panel, T-D + drift, wavelet, synthetic-vs-seismic, QC dashboard | **done** |
 | **M3** | Auto-tie | constrained DTW + phase scan + outer loop + velocity guardrail | **done** |
 | **M4** | UQ | ensemble, T-D corridor, per-horizon ±ms, multimodality flag | **done** |
-| **M5** | Copilot | tool surface, tool runner, streaming chat panel, generated tie report | next |
+| **M5** | Copilot | tool surface, tool runner, chat panel, generated tie report | **done** |
 
 M1 is the milestone that matters. Everything after it is leverage on top of a correct
 engine; if M1 is wrong, M3–M5 produce confident nonsense.
@@ -471,3 +471,35 @@ Three findings worth carrying forward:
    error, the sample interval), and the raw ensemble spread is reported *separately* so
    the two are never conflated. The floor blunts the failure; nothing within the method
    removes it, and the docs say so rather than implying otherwise.
+
+
+### What M5 established
+
+Claude (`claude-opus-5`, adaptive thinking with summarised reasoning) reaches the engine
+through fourteen tools bound to a `TieSession` — the same object and the same methods the
+UI drives. The architecture the plan asserted in §1 holds in practice: there is exactly
+one implementation of the pipeline, and no path by which the model touches an array.
+
+Three things worth recording:
+
+1. **The tool boundary needed no new work**, because it was designed in at M2. Every
+   session method already returned compact JSON with arrays kept inside, and that contract
+   was already under test. The copilot layer is thin precisely because the constraint was
+   imposed three milestones before there was a model to impose it for.
+
+2. **Errors are returned as data, not raised.** A tool that raises kills the loop; one
+   that returns `{"error": ...}` lets the model read a message written for a human and
+   act on it. The engine's exceptions name the offending depth interval or parameter, and
+   that turns out to serve a model as well as a person.
+
+3. **The permit gate logs denials, which the journal cannot.** A refused call changes
+   nothing, so the session never records it — but "the copilot wanted to rewrite the
+   time-depth and was stopped" is exactly what an audit trail should contain, and it lives
+   in `Copilot.permit_log()`.
+
+**Not verified:** the live API call. The tool surface, the gate, the loop, the transcript
+handling and the credential-failure path are all tested — the first four against a stub
+client that executes real tools against a real session, the last in the browser. But no
+request has ever been made to the actual service, because this environment has no
+Anthropic credentials. `Copilot.ask` should be treated as unproven until it has been run
+once with a key.

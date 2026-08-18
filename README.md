@@ -20,7 +20,7 @@ See [`docs/PLAN.md`](docs/PLAN.md) for the full design and roadmap.
 | **M2** Streamlit UI | done |
 | **M3** Auto-tie: constrained DTW + velocity guardrail | done |
 | **M4** Uncertainty quantification | done |
-| **M5** Claude copilot over the engine | next |
+| **M5** Claude copilot over the engine | done |
 
 ## Quick start
 
@@ -28,7 +28,7 @@ See [`docs/PLAN.md`](docs/PLAN.md) for the full design and roadmap.
 pip install -e ".[dev,app]"
 streamlit run app/streamlit_app.py   # the interactive tie
 python examples/demo_tie.py          # the same tie, headless, graded against truth
-python -m pytest -q                  # 203 tests
+python -m pytest -q                  # 222 tests
 ```
 
 The app opens on a synthetic case builder: choose a static, a wavelet phase, a
@@ -84,12 +84,39 @@ that knows its own answer.
 | `swt.uq` | Ensemble over interpreter choices: corridor, per-horizon tolerance, multimodality |
 | `swt.session` | The one mutable tie state — and the copilot's eventual tool surface |
 | `swt.viz` | Matplotlib panels, shared by the app, notebooks and reports |
+| `swt.copilot` | Claude's tool surface over the session, the permit gate, and the loop |
 
 `TieSession` is the seam between the deterministic core and everything above it.
 The UI drives it; the copilot will drive the *same* methods. Two rules hold at
 that boundary: **arrays never cross it** (every method returns compact JSON —
 statistics, intervals, verdicts, never a 16,000-sample curve), and **every
 mutation is journalled**, which is what a tie report is made of.
+
+## The copilot
+
+`swt.copilot` wires Claude (`claude-opus-5`, adaptive thinking) to a session
+through **the same methods the UI calls** — there is no second implementation of
+the pipeline to drift out of step, and no path by which the model touches a numpy
+array. Fourteen tools: eight read-only, six that change the tie.
+
+Its job is diagnosis, not narration. A dashboard already shows every number it can
+see; what it adds is *"correlation 0.42, the drift steps 8 ms at 2100 m and DT
+doubles over 2080–2140 m — that reads as a cycle skip, not geology"*.
+
+Two things are enforced rather than requested:
+
+- **Mutating tools are gated.** By default the copilot can look but not touch; a
+  refused call returns an explanation it must relay rather than retry. The
+  engine's guardrails still apply on top, so it cannot exceed the velocity limit
+  or invert the time-depth even with permission.
+- **Every refusal is logged.** A denied call changes nothing, so the session's
+  journal never sees it — but what the copilot *wanted* to do belongs in the audit
+  trail.
+
+The tool surface, the gate and the loop are tested against a stub client that
+plays scripted tool calls and executes them for real against a real session. **The
+live API call is not tested** — it needs credentials this environment lacks. Set
+`ANTHROPIC_API_KEY` to use it; everything else in SWT works without it.
 
 ## Six things this does that most well-tie code does not
 
@@ -138,7 +165,7 @@ live bugs that produced high correlations on a wrong time-depth.
 
 ## Testing
 
-203 tests, in five tiers:
+222 tests, in six tiers:
 
 - **Ground truth** (`tests/test_ground_truth.py`) — a forward-modelled earth is
   tied, and the recovered time-depth, static and wavelet phase are graded against
@@ -155,6 +182,8 @@ live bugs that produced high correlations on a wrong time-depth.
   warp never degrades the time-depth across both regimes.
 - **Uncertainty** (`tests/test_uq.py`) — corridor *coverage* against ground truth.
   An uncertainty estimate is only worth reporting if it is calibrated.
+- **Copilot** (`tests/test_copilot.py`) — the tool surface, the permit gate and
+  the loop, driven by a stub client executing real tools against a real session.
 
 ## Data
 
