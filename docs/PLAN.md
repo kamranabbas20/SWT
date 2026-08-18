@@ -313,8 +313,8 @@ after the breakpoint so the cache actually hits.
 | **M1** | Deterministic tie, no AI | load → condition → T-D → RC → wavelet → synthetic → manual shift → QC, **validated against synthetic ground truth** | **done** |
 | **M2** | Streamlit UI | log panel, T-D + drift, wavelet, synthetic-vs-seismic, QC dashboard | **done** |
 | **M3** | Auto-tie | constrained DTW + phase scan + outer loop + velocity guardrail | **done** |
-| **M4** | UQ | ensemble, T-D corridor, per-horizon ±ms, multimodality flag | next |
-| **M5** | Copilot | tool surface, tool runner, streaming chat panel, generated tie report | planned |
+| **M4** | UQ | ensemble, T-D corridor, per-horizon ±ms, multimodality flag | **done** |
+| **M5** | Copilot | tool surface, tool runner, streaming chat panel, generated tie report | next |
 
 M1 is the milestone that matters. Everything after it is leverage on top of a correct
 engine; if M1 is wrong, M3–M5 produce confident nonsense.
@@ -435,3 +435,39 @@ guarantee than "improves the correlation", and it is the one worth having.
 
 Two of the three tests would be absent from a system designed around a correlation
 threshold, and both of them exist to catch warps that *improve the correlation*.
+
+
+### What M4 established
+
+The ensemble re-runs the whole pipeline over sampled interpreter choices and reports a
+corridor, a per-horizon tolerance in milliseconds, and a multimodality flag.
+
+The result that matters is **coverage**, because it is the only thing that makes an
+uncertainty estimate worth reporting. Measured against ground truth across twelve
+forward-modelled cases, the P10–P90 corridor covers **0.815** (nominal 0.80), and the
+across-case coverage at mid-depth is 11/12. The corridor is calibrated, not decorative.
+
+Three findings worth carrying forward:
+
+1. **A sign error made the ensemble permanently "ambiguous".** Members start from
+   time-depth models deliberately offset by up to a wavelet period, to probe whether two
+   alignments a cycle apart are both defensible. The tie reports its shift relative to
+   that offset model, so the comparable quantity is the *sum*, not the difference. With
+   the sign wrong, every member looked like it had landed on a different cycle: a
+   reported 132 ms shift spread alongside a 2.6 ms corridor, two numbers that cannot
+   both be true. The disagreement between them is what exposed it.
+
+2. **A fraction alone cannot detect multimodality on a small ensemble.** At eight
+   members one stray draw is 12.5% and trips any sensible fraction threshold. Both a
+   fraction and an absolute minimum of two members are required.
+
+3. **The ensemble measures precision, not accuracy, and this is not fixable within the
+   method.** In one case of twelve every member agreed to within 3 ms and all were wrong
+   by 1.2 ms — a shared bias larger than the corridor half-width, so coverage collapsed
+   to 0.05 while the corridor looked its most confident. An ensemble over processing
+   choices is structurally blind to error that every member shares. The reported corridor
+   therefore carries a **resolution floor** of half a seismic sample, acknowledging error
+   sources the ensemble never varies (the noise realisation, the wavelet's own estimation
+   error, the sample interval), and the raw ensemble spread is reported *separately* so
+   the two are never conflated. The floor blunts the failure; nothing within the method
+   removes it, and the docs say so rather than implying otherwise.

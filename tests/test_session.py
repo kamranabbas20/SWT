@@ -194,3 +194,33 @@ class TestPanels:
         ]
         assert spans[1] == pytest.approx(0.05 * spans[0], rel=0.01)
         figure.clf()
+
+
+class TestUncertainty:
+    def test_ensemble_runs_and_summarises(self, tied):
+        payload = tied.run_uncertainty(n_members=6, seed=1)
+        assert payload["n_members"] + payload["n_failed"] == 6
+        json.dumps(payload)
+        assert len(json.dumps(payload)) < 6000
+        assert tied.state()["ensemble_members"] == tied.ensemble.n
+
+    def test_ensemble_needs_seismic(self, session):
+        session.seismic = None
+        with pytest.raises(SessionError, match="no seismic"):
+            session.run_uncertainty(n_members=4)
+
+    def test_reconditioning_invalidates_the_ensemble(self, tied):
+        tied.run_uncertainty(n_members=4, seed=0)
+        assert tied.ensemble is not None
+        tied.condition()
+        assert tied.ensemble is None
+
+    def test_uncertainty_panel_builds(self, tied):
+        tied.run_uncertainty(n_members=6, seed=1)
+        figure = panels.uncertainty_panel(tied)
+        assert figure.get_axes()
+        figure.clf()
+
+    def test_uncertainty_panel_refuses_before_an_ensemble(self, tied):
+        with pytest.raises(ValueError, match="no ensemble"):
+            panels.uncertainty_panel(tied)

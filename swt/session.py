@@ -35,6 +35,7 @@ from .timedepth.integrate import ShallowModel, integrate_sonic
 from .timedepth.model import TimeDepth
 from .tie.auto import AutoTieResult, auto_tie
 from .tie.iterate import TieResult, tie
+from .uq.ensemble import Ensemble, run_ensemble
 from .trace import Trace
 from .units import slowness_to_velocity
 
@@ -70,6 +71,7 @@ class TieSession:
     drift: DriftResult | None = None
     result: TieResult | None = None
     auto: AutoTieResult | None = None
+    ensemble: Ensemble | None = None
 
     # grading, present only for synthetic cases that know their own answer
     truth: dict = field(default_factory=dict)
@@ -138,7 +140,7 @@ class TieSession:
             "cycle_skips": [skip.summary() for skip in self.cycle_skips],
         }
         # Conditioning invalidates everything derived from the log.
-        self.time_depth = self.drift = self.result = self.auto = None
+        self.time_depth = self.drift = self.result = self.auto = self.ensemble = None
         return self._record("condition", summary)
 
     def build_time_depth(
@@ -153,7 +155,7 @@ class TieSession:
             replacement_velocity=replacement_velocity, twt_at_log_top=twt_at_log_top
         )
         self.time_depth = integrate_sonic(self.depth_tvdss, self.sonic_us_per_m, shallow)
-        self.drift = self.result = self.auto = None
+        self.drift = self.result = self.auto = self.ensemble = None
 
         return self._record("build time-depth", {
             "shallow_model": shallow.describe(float(self.depth_tvdss[0])),
@@ -191,7 +193,7 @@ class TieSession:
             knot_depth=knots,
         )
         self.time_depth = self.drift.time_depth
-        self.result = self.auto = None
+        self.result = self.auto = self.ensemble = None
 
         return self._record("calibrate", {
             **self.drift.summary(),
@@ -247,6 +249,46 @@ class TieSession:
             **self._truth_check(self.time_depth),
         })
 
+    def run_uncertainty(
+        self,
+        n_members: int = 24,
+        seed: int = 0,
+        probe_cycle_ambiguity: bool = True,
+        progress=None,
+        **kwargs: Any,
+    ) -> dict:
+        """Re-run the tie over sampled interpreter choices and report a corridor.
+
+        The deliverable is a band and a per-horizon tolerance in milliseconds,
+        not a curve. What the ensemble measures is how much the answer depends
+        on decisions no one can make uniquely -- which is a narrower question
+        than "how uncertain is the earth", and the one that changes what a tie
+        can be used for.
+        """
+        self._require("sonic_us_per_m", "load logs before running an ensemble")
+        if self.seismic is None:
+            raise SessionError("no seismic loaded; nothing to tie to")
+
+        self.ensemble = run_ensemble(
+            self.seismic,
+            self.depth_tvdss,
+            self._raw_sonic(),
+            self.density_g_cm3,
+            checkshot_depth=(
+                self.checkshots.depth_tvdss_m if self.checkshots is not None else None
+            ),
+            checkshot_twt=(
+                self.checkshots.twt_s if self.checkshots is not None else None
+            ),
+            n_members=n_members,
+            seed=seed,
+            probe_cycle_ambiguity=probe_cycle_ambiguity,
+            truth_twt=self.truth.get("twt_at_log") if self.truth else None,
+            progress=progress,
+            **kwargs,
+        )
+        return self._record("uncertainty", self.ensemble.summary())
+
     # -- derived quantities for display -------------------------------------
 
     def velocity(self) -> np.ndarray:
@@ -289,6 +331,7 @@ class TieSession:
             "n_cycle_skips": len(self.cycle_skips),
             "tied": self.result is not None,
             "warp_accepted": self.auto.warp_accepted if self.auto else None,
+            "ensemble_members": self.ensemble.n if self.ensemble else None,
             "correlation": (
                 round(self.result.metrics.correlation, 4) if self.result else None
             ),

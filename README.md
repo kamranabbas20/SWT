@@ -19,8 +19,8 @@ See [`docs/PLAN.md`](docs/PLAN.md) for the full design and roadmap.
 | **M1** Deterministic tie, validated against ground truth | done |
 | **M2** Streamlit UI | done |
 | **M3** Auto-tie: constrained DTW + velocity guardrail | done |
-| **M4** Uncertainty quantification | next |
-| **M5** Claude copilot over the engine | planned |
+| **M4** Uncertainty quantification | done |
+| **M5** Claude copilot over the engine | next |
 
 ## Quick start
 
@@ -28,7 +28,7 @@ See [`docs/PLAN.md`](docs/PLAN.md) for the full design and roadmap.
 pip install -e ".[dev,app]"
 streamlit run app/streamlit_app.py   # the interactive tie
 python examples/demo_tie.py          # the same tie, headless, graded against truth
-python -m pytest -q                  # 179 tests
+python -m pytest -q                  # 203 tests
 ```
 
 The app opens on a synthetic case builder: choose a static, a wavelet phase, a
@@ -81,6 +81,7 @@ that knows its own answer.
 | `swt.tie` | Bulk shift, constant-phase scan, constrained DTW, the velocity guardrail |
 | `swt.qc` | Correlation, NRMS, PEP — and whether any of them is *significant* |
 | `swt.forward` | The synthetic earth with a known answer |
+| `swt.uq` | Ensemble over interpreter choices: corridor, per-horizon tolerance, multimodality |
 | `swt.session` | The one mutable tie state — and the copilot's eventual tool surface |
 | `swt.viz` | Matplotlib panels, shared by the app, notebooks and reports |
 
@@ -90,7 +91,7 @@ that boundary: **arrays never cross it** (every method returns compact JSON —
 statistics, intervals, verdicts, never a 16,000-sample curve), and **every
 mutation is journalled**, which is what a tie report is made of.
 
-## Five things this does that most well-tie code does not
+## Six things this does that most well-tie code does not
 
 **Significance testing.** A seismic trace is band-limited, so a 200 ms window of
 10–50 Hz data holds roughly 16 independent numbers, not 100. Correlating two
@@ -124,12 +125,20 @@ tests — the claim is plausible (≤15% by default), the warp *reached* that cl
 rather than being clipped to it, and it buys enough correlation to justify the
 freedom. A rejected warp is discarded even when it correlates better.
 
+**Uncertainty is tested for calibration, not just produced.** An ensemble re-runs
+the whole tie over sampled interpreter choices — despike threshold, drift knots,
+wavelet length, upscaling — and reports a corridor and a per-horizon tolerance in
+milliseconds rather than a curve. Crucially the corridor's *coverage* is measured
+against ground truth: a P10–P90 band must contain the truth about 80% of the time,
+and it measures 0.815 across cases. A band that claims 80% and delivers 40% is not
+conservative, it is a false statement that will be believed.
+
 Each of these was found by the ground-truth tests, not by inspection — three were
 live bugs that produced high correlations on a wrong time-depth.
 
 ## Testing
 
-179 tests, in four tiers:
+203 tests, in five tiers:
 
 - **Ground truth** (`tests/test_ground_truth.py`) — a forward-modelled earth is
   tied, and the recovered time-depth, static and wavelet phase are graded against
@@ -144,6 +153,8 @@ live bugs that produced high correlations on a wrong time-depth.
 - **Guardrail and auto-tie** (`tests/test_guardrail.py`, `tests/test_autotie.py`) —
   the velocity arithmetic against hand-built warps, and the property that the
   warp never degrades the time-depth across both regimes.
+- **Uncertainty** (`tests/test_uq.py`) — corridor *coverage* against ground truth.
+  An uncertainty estimate is only worth reporting if it is calibrated.
 
 ## Data
 

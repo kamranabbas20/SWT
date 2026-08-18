@@ -14,6 +14,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import numpy as np
 import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -248,6 +249,27 @@ saturation_limit = st.sidebar.slider(
     ),
 )
 
+st.sidebar.subheader("6. Uncertainty")
+use_uq = st.sidebar.checkbox(
+    "run ensemble",
+    value=False,
+    help=(
+        "Re-runs the whole tie over sampled interpreter choices \u2014 despike "
+        "threshold, drift knots, wavelet length, upscaling \u2014 and reports a "
+        "corridor instead of a curve. Slow: every member is a full pipeline run."
+    ),
+)
+n_members = st.sidebar.slider("ensemble members", 4, 48, 16, 4, disabled=not use_uq)
+probe_cycles = st.sidebar.checkbox(
+    "probe cycle ambiguity", value=True, disabled=not use_uq,
+    help=(
+        "Start members from time-depth models offset by up to a wavelet period, "
+        "so that if two alignments a cycle apart are both defensible the ensemble "
+        "finds both. Without it the corridor measures precision around whichever "
+        "loop the first run happened to reach."
+    ),
+)
+
 run = st.sidebar.button("Run pipeline", type="primary", use_container_width=True)
 
 if run:
@@ -274,6 +296,17 @@ if run:
                 )
             else:
                 current.run_tie(**tie_options)
+
+            if use_uq:
+                bar = st.progress(0.0, text="Running ensemble...")
+                current.run_uncertainty(
+                    n_members=int(n_members),
+                    probe_cycle_ambiguity=probe_cycles,
+                    progress=lambda done, total: bar.progress(
+                        done / total, text=f"Ensemble member {done}/{total}"
+                    ),
+                )
+                bar.empty()
         st.session_state["error"] = None
     except (SessionError, ValueError) as exc:
         st.session_state["error"] = f"{type(exc).__name__}: {exc}"
@@ -305,6 +338,8 @@ if graded:
 tab_names = ["Tie", "Logs", "Time-depth", "Wavelet", "QC"]
 if current.auto is not None and current.auto.warp is not None:
     tab_names.append("Warp")
+if current.ensemble is not None and current.ensemble.members:
+    tab_names.append("Uncertainty")
 tab_names.append("Journal")
 if current.truth:
     tab_names.append("Truth")
@@ -436,6 +471,34 @@ if "Warp" in tabs:
         left.json(auto.warp.summary())
         right.subheader("Guardrail")
         right.json(auto.guardrail.summary())
+
+if "Uncertainty" in tabs:
+    with tabs["Uncertainty"]:
+        ensemble = current.ensemble
+        st.pyplot(panels.uncertainty_panel(current, dark=dark), use_container_width=True)
+        (st.warning if ensemble.is_multimodal else st.success)(ensemble.verdict())
+
+        st.subheader("Per-horizon tolerance")
+        st.caption(
+            "This is the deliverable \u2014 what whoever does the depth conversion "
+            "needs, and what a single time-depth curve cannot give them."
+        )
+        depths = current.depth_tvdss
+        marks = np.linspace(depths[0], depths[-1], 6)
+        st.dataframe(ensemble.per_horizon(marks), use_container_width=True, hide_index=True)
+
+        st.json(ensemble.summary())
+        if ensemble.failures:
+            with st.expander(f"{len(ensemble.failures)} member(s) failed"):
+                st.dataframe(ensemble.failures, use_container_width=True, hide_index=True)
+        st.caption(
+            "The ensemble varies processing **choices**, so it measures how much the "
+            "answer depends on decisions nobody can make uniquely. It does not vary "
+            "the seismic's noise, the wavelet's own estimation error, or the sample "
+            "interval, and so cannot see error that every member shares \u2014 which "
+            "is why the corridor carries a resolution floor and why this is a "
+            "precision estimate, not an accuracy one."
+        )
 
 with tabs["Journal"]:
     st.subheader("What was done")

@@ -404,6 +404,72 @@ def warp_panel(session, dark: bool = False):
     return _prepare(fig, axes, dark)
 
 
+def uncertainty_panel(session, dark: bool = False, lower: float = 10.0,
+                      upper: float = 90.0):
+    """The corridor, its width, and the ensemble's alignment modes.
+
+    The middle panel is the deliverable: a tolerance in milliseconds at every
+    depth, which is what whoever does the depth conversion actually needs and
+    what a single time-depth curve cannot give them.
+
+    The right-hand panel is the one that can invalidate the other two. If the
+    ensemble splits into two alignments a cycle apart, the corridor between them
+    is not a range of plausible answers -- it spans a gap in which *no* value is
+    plausible -- and the median is a number nobody believes.
+    """
+    ensemble = getattr(session, "ensemble", None)
+    if ensemble is None or not ensemble.members:
+        raise ValueError("no ensemble has been run yet")
+
+    band = ensemble.corridor(lower, upper)
+    fig, axes = plt.subplots(1, 3, figsize=(12, 6))
+
+    depth = band["depth_tvdss"]
+    axes[0].fill_betweenx(depth, band["low"] * 1e3, band["high"] * 1e3,
+                          color=SEISMIC, alpha=0.30,
+                          label=f"P{lower:g}-P{upper:g}")
+    axes[0].plot(band["mid"] * 1e3, depth, color=SEISMIC, linewidth=1.0, label="median")
+    if ensemble.truth_twt is not None:
+        axes[0].plot(ensemble.truth_twt * 1e3, depth, color=SYNTHETIC,
+                     linewidth=1.0, linestyle="--", label="truth")
+    axes[0].set_xlabel("TWT (ms)")
+    axes[0].set_ylabel("TVDSS (m)")
+    axes[0].set_title("time-depth corridor", fontsize=9)
+    axes[0].legend(fontsize=7)
+    axes[0].invert_yaxis()
+
+    half_width = ensemble.width_ms(lower, upper) / 2.0
+    raw = ensemble.ensemble_half_width_ms(lower, upper)
+    axes[1].plot(half_width, depth, color=ACCENT, linewidth=1.2, label="reported")
+    axes[1].plot(raw, depth, color=NEUTRAL, linewidth=0.9, linestyle=":",
+                 label="ensemble only")
+    axes[1].axvline(ensemble.resolution_floor_s * 1e3, color=SYNTHETIC,
+                    linewidth=1.0, linestyle="--", label="resolution floor")
+    axes[1].set_xlabel("uncertainty (+/- ms)")
+    axes[1].set_title("tolerance vs depth", fontsize=9)
+    axes[1].legend(fontsize=7)
+    axes[1].invert_yaxis()
+
+    shifts = np.array([m.total_shift_s for m in ensemble.members]) * 1e3
+    axes[2].hist(shifts, bins=max(ensemble.n // 2, 6),
+                 color=WARNING if ensemble.is_multimodal else SEISMIC, alpha=0.8)
+    for mode in ensemble.modes():
+        axes[2].axvline(mode["shift_ms"], color=SYNTHETIC, linewidth=1.0, linestyle="--")
+    axes[2].set_xlabel("bulk shift (ms)")
+    axes[2].set_ylabel("members")
+    axes[2].set_title(
+        f"alignment modes -- {len(ensemble.modes())} found", fontsize=9,
+        color=WARNING if ensemble.is_multimodal else _style(dark)["fg"],
+    )
+
+    fig.suptitle(
+        ensemble.verdict(lower, upper)[:150],
+        color=WARNING if ensemble.is_multimodal else _style(dark)["fg"], fontsize=8,
+    )
+    fig.tight_layout()
+    return _prepare(fig, axes, dark)
+
+
 def truth_panel(session, dark: bool = False):
     """Error against ground truth -- synthetic cases only.
 
