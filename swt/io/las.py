@@ -71,15 +71,86 @@ class WellLogs:
                 out[field_name] = round(100.0 * finite / self.n, 1)
         return out
 
+    def tie_interval(self) -> tuple[float, float] | None:
+        """Depth range where sonic **and** density are both present.
+
+        A tie needs impedance, and impedance needs both curves, so this is the
+        only interval that can actually be tied -- not the range of the file, and
+        not the range of either curve alone. Real logs routinely start at
+        different depths (a sonic from 48 m, a density from 500 m), which makes
+        the usable interval far shorter than the header suggests.
+        """
+        if self.sonic_us_per_m is None or self.density_g_cm3 is None:
+            return None
+        usable = np.isfinite(self.sonic_us_per_m) & np.isfinite(self.density_g_cm3)
+        if not np.any(usable):
+            return None
+        depths = self.depth_md_m[usable]
+        return float(depths[0]), float(depths[-1])
+
+    def warnings(self) -> list[str]:
+        """Problems worth a human's attention before tying.
+
+        A missing curve must be announced here rather than left as a ``None``
+        field for a caller to trip over three steps later. The load "succeeding"
+        while quietly dropping the sonic is precisely the silent failure this
+        package is arranged against.
+        """
+        issues: list[str] = []
+
+        if self.sonic_us_per_m is None:
+            issues.append(
+                "No sonic curve was found. Without it there is no velocity, no "
+                f"impedance and no synthetic. Mnemonics in the file: "
+                f"{self.meta.get('mnemonics')}. Pass an explicit override, e.g. "
+                "load_las(path, curves={'sonic': 'YOUR_MNEMONIC'})."
+            )
+        if self.density_g_cm3 is None:
+            issues.append(
+                "No density curve was found. Impedance needs velocity *and* "
+                f"density. Mnemonics in the file: {self.meta.get('mnemonics')}."
+            )
+
+        for role, candidates in (self.meta.get("ambiguous_curves") or {}).items():
+            issues.append(
+                f"The file carries {len(candidates)} curves for {role!r}: "
+                f"{', '.join(candidates)}. The last was used, on the convention "
+                "that a later curve is the processed one. Override explicitly if "
+                "that is wrong -- the choice changes the tie."
+            )
+
+        interval = self.tie_interval()
+        if interval is None and self.sonic_us_per_m is not None \
+                and self.density_g_cm3 is not None:
+            issues.append(
+                "The sonic and density never overlap: there is no depth at which "
+                "both are present, so no interval can be tied."
+            )
+        elif interval is not None:
+            span = interval[1] - interval[0]
+            whole = float(self.depth_md_m[-1] - self.depth_md_m[0])
+            if span < 0.5 * whole:
+                issues.append(
+                    f"Only {interval[0]:.0f}-{interval[1]:.0f} m has both sonic and "
+                    f"density ({span:.0f} m of a {whole:.0f} m file). The tie is "
+                    "restricted to that interval."
+                )
+        return issues
+
     def summary(self) -> dict:
+        interval = self.tie_interval()
         return {
             "name": self.name,
             "n_samples": self.n,
             "depth_range_m": [round(float(self.depth_md_m[0]), 2),
                               round(float(self.depth_md_m[-1]), 2)],
+            "tie_interval_m": (
+                None if interval is None else [round(interval[0], 2), round(interval[1], 2)]
+            ),
             "sample_interval_m": round(float(np.median(np.diff(self.depth_md_m))), 4),
             "curve_coverage_percent": self.coverage(),
             "source_units": self.source_units,
+            "warnings": self.warnings(),
         }
 
 
@@ -109,21 +180,45 @@ def load_las(
 
     las = lasio.read(path)
     overrides = dict(curves or {})
-    available = {curve.mnemonic.upper(): curve for curve in las.curves}
+
+    # A LAS may carry the same mnemonic twice -- a raw and a corrected sonic, say.
+    # lasio makes them unique by appending ":1", ":2", so a plain lookup for "DT"
+    # matches *neither*, and the curve vanishes silently. Match on the base name
+    # and keep every candidate, so a duplicate becomes a reported choice rather
+    # than a missing log.
+    available: dict[str, list] = {}
+    for curve in las.curves:
+        available.setdefault(_base_mnemonic(curve.mnemonic), []).append(curve)
+
+    ambiguous: dict[str, list[str]] = {}
 
     def find(role: str):
         mnemonic = overrides.get(role)
         if mnemonic is not None:
-            curve = available.get(mnemonic.upper())
-            if curve is None:
+            matches = available.get(_base_mnemonic(mnemonic))
+            if not matches:
                 raise KeyError(
                     f"curve {mnemonic!r} requested for {role!r} but not in {path}; "
                     f"available: {sorted(available)}"
                 )
-            return curve
+            # An explicit override may name the exact lasio mnemonic, suffix included.
+            for curve in matches:
+                if curve.mnemonic.upper() == mnemonic.upper():
+                    return curve
+            return matches[-1]
+
         for candidate in CURVE_ALIASES[role]:
-            if candidate in available:
-                return available[candidate]
+            matches = available.get(candidate)
+            if not matches:
+                continue
+            if len(matches) > 1:
+                # The later curve is conventionally the processed or corrected
+                # one, so it is the better default -- but the choice is recorded
+                # and reported rather than made quietly.
+                ambiguous[role] = [
+                    f"{c.mnemonic} ({c.descr.strip()[:60]})" for c in matches
+                ]
+            return matches[-1]
         return None
 
     depth_curve = find("depth")
@@ -176,8 +271,18 @@ def load_las(
         gamma=gamma,
         name=well_name,
         source_units=source_units,
-        meta={"path": path, "n_curves": len(las.curves)},
+        meta={
+            "path": path,
+            "n_curves": len(las.curves),
+            "ambiguous_curves": ambiguous,
+            "mnemonics": sorted(available),
+        },
     )
+
+
+def _base_mnemonic(mnemonic: str) -> str:
+    """Strip lasio's uniquifying ``:N`` suffix from a duplicated mnemonic."""
+    return str(mnemonic).upper().split(":")[0].strip()
 
 
 def _header_value(las, key: str) -> str | None:

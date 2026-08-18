@@ -151,6 +151,9 @@ else:
             new = TieSession(name=Path(las_path).stem if las_path else "well")
             logs = load_las(las_path)
             new.logs = logs
+            st.sidebar.json(logs.summary())
+            for warning in logs.warnings():
+                st.sidebar.warning(warning)
             new.sonic_us_per_m = logs.sonic_us_per_m
             new.density_g_cm3 = logs.density_g_cm3
             if deviation_path:

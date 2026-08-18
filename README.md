@@ -56,7 +56,7 @@ manual tie at 0.7, and this software is built to say so.
 
 ## Status
 
-All five milestones complete. **235 tests.**
+All five milestones complete. **243 tests.**
 
 | Milestone | State |
 |---|---|
@@ -89,7 +89,7 @@ git checkout claude/ai-seismic-well-tie-wmezk7
 pip install -e ".[dev,app]"
 
 python3 examples/demo_tie.py     # headless demo, ends with PASS
-python3 -m pytest -q             # 235 tests, ~3 minutes
+python3 -m pytest -q             # 243 tests, ~3 minutes
 streamlit run app/streamlit_app.py
 ```
 
@@ -291,7 +291,7 @@ Set `ANTHROPIC_API_KEY` to use it. Everything else works without it.
 
 ## Testing
 
-235 tests, in seven tiers:
+243 tests, in seven tiers:
 
 | File | What it protects |
 |---|---|

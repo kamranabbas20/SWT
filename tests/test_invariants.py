@@ -442,3 +442,94 @@ class TestWaveletRecentring:
         w = ricker(30.0, 0.002)
         for phase in (0.0, 45.0, 90.0, 180.0):
             assert abs(w.rotate(phase).energy_centre_s()) < 0.5 * w.dt
+
+
+class TestDuplicateMnemonics:
+    """A LAS may name two curves the same thing. Found on real F3 data.
+
+    lasio makes duplicates unique by appending ":1", ":2", so a lookup for "DT"
+    matched neither and the sonic vanished -- while the load reported success
+    with a null curve. A load that silently drops the most important log in the
+    file is the exact failure this package is arranged against.
+    """
+
+    @staticmethod
+    def write_las(tmp_path, curve_lines, data_lines):
+        path = tmp_path / "well.las"
+        path.write_text(
+            "~Version\nVERS. 2.0 :\nWRAP. NO :\n"
+            "~Well\nSTRT .M 30.0 :\nSTOP .M 200.0 :\nSTEP .M 0.15 :\n"
+            "NULL . -999.25 :\nWELL . TEST :\n"
+            "~Curve\n" + curve_lines + "~A\n" + data_lines
+        )
+        return str(path)
+
+    def test_a_duplicated_sonic_is_still_found(self, tmp_path):
+        path = self.write_las(
+            tmp_path,
+            "DEPTH .M   : 1\nRHOB .g/cc : 2\nDT .us/ft : 3 raw\nDT .us/ft : 4 corrected\n",
+            "100.0 2.35 150.0 149.0\n150.0 2.40 145.0 144.0\n200.0 2.45 140.0 139.0\n",
+        )
+        from swt.io.las import load_las
+
+        logs = load_las(path)
+        assert logs.sonic_us_per_m is not None, "the duplicated sonic was dropped"
+        assert logs.density_g_cm3 is not None
+
+    def test_the_later_duplicate_is_used_and_the_choice_reported(self, tmp_path):
+        path = self.write_las(
+            tmp_path,
+            "DEPTH .M   : 1\nDT .us/ft : 2 raw\nDT .us/ft : 3 corrected\n",
+            "100.0 150.0 149.0\n150.0 145.0 144.0\n200.0 140.0 139.0\n",
+        )
+        from swt.io.las import load_las
+        from swt.units import slowness_to_us_per_m
+
+        logs = load_las(path)
+        # The second DT column (149, 144, 139) is the one that should be used.
+        assert logs.sonic_us_per_m[0] == pytest.approx(
+            slowness_to_us_per_m(np.array([149.0]), "us/ft")[0]
+        )
+        assert any("2 curves for 'sonic'" in w for w in logs.warnings())
+
+    def test_an_explicit_override_can_pick_the_other_one(self, tmp_path):
+        path = self.write_las(
+            tmp_path,
+            "DEPTH .M   : 1\nDT .us/ft : 2 raw\nDT .us/ft : 3 corrected\n",
+            "100.0 150.0 149.0\n150.0 145.0 144.0\n200.0 140.0 139.0\n",
+        )
+        from swt.io.las import load_las
+        from swt.units import slowness_to_us_per_m
+
+        logs = load_las(path, curves={"sonic": "DT:1"})
+        assert logs.sonic_us_per_m[0] == pytest.approx(
+            slowness_to_us_per_m(np.array([150.0]), "us/ft")[0]
+        )
+
+    def test_a_missing_sonic_is_announced_not_returned_as_none(self, tmp_path):
+        path = self.write_las(
+            tmp_path, "DEPTH .M : 1\nRHOB .g/cc : 2\n",
+            "100.0 2.35\n150.0 2.40\n200.0 2.45\n",
+        )
+        from swt.io.las import load_las
+
+        logs = load_las(path)
+        assert logs.sonic_us_per_m is None
+        warnings = logs.warnings()
+        assert any("No sonic curve" in w for w in warnings)
+        # The message must name what *is* in the file, so the fix is obvious.
+        assert any("RHOB" in w for w in warnings)
+
+    def test_the_tie_interval_is_where_both_curves_exist(self, tmp_path):
+        """Real logs start at different depths; only the overlap can be tied."""
+        path = self.write_las(
+            tmp_path, "DEPTH .M : 1\nDT .us/ft : 2\nRHOB .g/cc : 3\n",
+            "50.0 150.0 -999.25\n100.0 148.0 -999.25\n"
+            "150.0 145.0 2.40\n200.0 140.0 2.45\n",
+        )
+        from swt.io.las import load_las
+
+        logs = load_las(path)
+        interval = logs.tie_interval()
+        assert interval == (150.0, 200.0), interval
+        assert any("both sonic and density" in w for w in logs.warnings())
