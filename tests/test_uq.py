@@ -219,3 +219,60 @@ class TestEnsembleMechanics:
                 case.seismic, case.log_depth_tvdss, case.log_dt_us_per_m,
                 case.log_rho_g_cm3, n_members=1,
             )
+
+
+class TestRobustSpread:
+    """A percentile corridor must not be reported beside a non-robust sigma.
+
+    A single member landing on a different cycle sits far from the rest. The
+    percentile band ignores it; the ordinary standard deviation does not. Before
+    this was fixed the per-horizon table read `half_width_ms: 1.98` next to
+    `std_ms: 4.43` -- two numbers differing by a factor of two, with nothing to
+    tell a reader which one to believe.
+    """
+
+    def test_a_lone_outlier_does_not_inflate_the_reported_spread(self):
+        depth = np.linspace(1000.0, 2000.0, 51)
+        base = 0.8 + depth * 1e-4
+        members = [
+            Member(draw=None, twt=base + (0.014 if i == 0 else 0.0005 * (i % 3)),
+                   correlation=0.9, total_shift_s=0.0, phase_deg=0.0)
+            for i in range(10)
+        ]
+        ensemble = Ensemble(depth_tvdss=depth, members=members, resolution_floor_s=0.0)
+
+        report = ensemble.uncertainty_at(1500.0)
+
+        # The 14 ms outlier must not set the reported spread...
+        assert report["robust_std_ms"] < 3.0
+        # ...but it must be reported.
+        assert report["n_outlier_members"] == 1
+
+    def test_clean_ensembles_report_no_outliers(self):
+        rng = np.random.default_rng(0)
+        depth = np.linspace(1000.0, 2000.0, 51)
+        base = 0.8 + depth * 1e-4
+        members = [
+            Member(draw=None, twt=base + 0.001 * rng.standard_normal(),
+                   correlation=0.9, total_shift_s=0.0, phase_deg=0.0)
+            for _ in range(20)
+        ]
+        ensemble = Ensemble(depth_tvdss=depth, members=members, resolution_floor_s=0.0)
+        report = ensemble.uncertainty_at(1500.0)
+        assert report["n_outlier_members"] <= 1
+        assert report["robust_std_ms"] > 0
+
+    def test_the_two_spread_measures_agree_on_clean_data(self):
+        """Half-width should be ~1.28x the robust sigma for Gaussian members."""
+        rng = np.random.default_rng(1)
+        depth = np.linspace(1000.0, 2000.0, 51)
+        base = 0.8 + depth * 1e-4
+        members = [
+            Member(draw=None, twt=base + 0.002 * rng.standard_normal(),
+                   correlation=0.9, total_shift_s=0.0, phase_deg=0.0)
+            for _ in range(60)
+        ]
+        ensemble = Ensemble(depth_tvdss=depth, members=members, resolution_floor_s=0.0)
+        report = ensemble.uncertainty_at(1500.0)
+        ratio = report["half_width_ms"] / report["robust_std_ms"]
+        assert 0.9 < ratio < 1.8, f"half-width / robust sigma = {ratio:.2f}"

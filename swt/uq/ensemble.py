@@ -165,18 +165,42 @@ class Ensemble:
 
     def uncertainty_at(self, depth_tvdss: float, lower: float = 10.0,
                        upper: float = 90.0) -> dict:
-        """Time and its uncertainty at one depth -- the depth-conversion answer."""
+        """Time and its uncertainty at one depth -- the depth-conversion answer.
+
+        The spread is reported as a **robust** scale (1.4826 x the median absolute
+        deviation, which equals the standard deviation for clean Gaussian data)
+        rather than as the ordinary standard deviation, and outlier members are
+        counted separately.
+
+        The reason is a real inconsistency found in this report. A single member
+        that lands on a different cycle sits ten or more milliseconds from the
+        rest. The percentile band correctly ignores it, but the standard
+        deviation does not -- so the table read
+        ``half_width_ms: 1.98, std_ms: 4.43``, two numbers differing by a factor
+        of two with nothing to say which to believe. Mixing a percentile corridor
+        with a non-robust scale invites the reader to trust the wrong one.
+
+        The outlier count carries the information the standard deviation was
+        smuggling in, and carries it legibly: *one member tied elsewhere* is a
+        statement someone can act on, where an inflated sigma is not.
+        """
         stack = self.stack()
         index = int(np.argmin(np.abs(self.depth_tvdss - float(depth_tvdss))))
         times = stack[:, index]
         low, mid, high = np.percentile(times, [lower, 50.0, upper])
+
+        deviation = np.abs(times - mid)
+        robust = 1.4826 * float(np.median(deviation))
+        outliers = int(np.count_nonzero(deviation > 3.0 * robust)) if robust > 0 else 0
+
         return {
             "depth_m": round(float(self.depth_tvdss[index]), 1),
             "twt_ms": round(float(mid) * 1e3, 2),
             "p_low_ms": round(float(low) * 1e3, 2),
             "p_high_ms": round(float(high) * 1e3, 2),
             "half_width_ms": round(float(high - low) * 1e3 / 2.0, 2),
-            "std_ms": round(float(np.std(times)) * 1e3, 2),
+            "robust_std_ms": round(robust * 1e3, 2),
+            "n_outlier_members": outliers,
         }
 
     def per_horizon(self, depths, lower: float = 10.0, upper: float = 90.0) -> list[dict]:
